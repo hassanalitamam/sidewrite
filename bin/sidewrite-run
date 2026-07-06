@@ -1,0 +1,1658 @@
+#!/usr/bin/env bash
+#
+# sidewrite-run — the sidewrite implement pipeline (invoked by `sidewrite run`,
+#           or directly as `sidewrite <provider> "task"`): ensure the viewer
+#           daemon is up, resolve provider/model, require PLAN.md, create a git
+#           worktree, run the implement step through ccx -> sj-bridge over a
+#           FIFO, mark the run done, and report.
+#
+# Usage: sidewrite run [provider] [--model M] ["task..."]
+#
+set -eo pipefail
+
+# Reuse a persistent V8 compile cache across the many short-lived node spawns in
+# this pipeline (Node>=22.8 honours NODE_COMPILE_CACHE; older node ignores it
+# harmlessly). Shaves cold-start latency off every _api / event / bridge node.
+export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-$HOME/.sidewrite/ccache}"
+mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
+
+# ---- locate ourselves / the plugin scripts -------------------------------
+SELF="${BASH_SOURCE[0]}"
+while [ -h "$SELF" ]; do
+  dir="$(cd -P "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+BIN_DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+ROOT_DIR="$(cd -P "$BIN_DIR/.." && pwd)"
+SCRIPTS_DIR="$ROOT_DIR/plugin/scripts"
+
+PM="$SCRIPTS_DIR/process-manager.cjs"
+SJ_BRIDGE="$SCRIPTS_DIR/sj-bridge.cjs"
+# CCX is overridable for testing/advanced use; defaults to the shipped runner.
+CCX="${SIDEWRITE_CCX:-$BIN_DIR/ccx}"
+
+DAEMON_JSON="$HOME/.sidewrite/daemon.json"
+RUNS_DIR="$HOME/.sidewrite/runs"
+mkdir -p "$RUNS_DIR"
+
+# ---- backfill globally-enabled skills into this station before ccx runs --
+# `sidewrite code` already does this on every interactive launch
+# (bin/sidewrite's _sw_ensure_essential_skills/_sw_ensure_plugin_skills), but a
+# headless-only/delegate-only provider that never runs `sidewrite code` was
+# skipping the backfill entirely — so a skill enabled from the dashboard never
+# reached it. Mirror the same two steps here, right before every ccx dispatch.
+_swrun_ensure_skills() {
+  local prov="$1" cfgdir="$HOME/.claude-$1"
+  [ -z "$prov" ] && return 0
+  mkdir -p "$cfgdir/skills" 2>/dev/null || true
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const H = process.env.HOME;
+    const destSkills = process.argv[1];
+    let data;
+    try { data = JSON.parse(fs.readFileSync(H + "/.sidewrite/essential-skills.json", "utf8")); }
+    catch (e) { process.exit(0); }
+    const skills = Array.isArray(data.skills) ? data.skills : [];
+    for (const s of skills) {
+      if (!s || typeof s.name !== "string" || !s.path) continue;
+      const dest = path.join(destSkills, s.name);
+      if (fs.existsSync(path.join(dest, "SKILL.md"))) continue;
+      const srcDir = path.dirname(s.path);
+      if (!fs.existsSync(path.join(srcDir, "SKILL.md"))) continue;
+      try { fs.cpSync(srcDir, dest, { recursive: true }); } catch (e) { /* fail-soft per skill */ }
+    }
+  ' "$cfgdir/skills" 2>/dev/null || true
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const H = process.env.HOME;
+    const cfgdir = process.argv[1];
+    let entries = [];
+    try { entries = fs.readdirSync(H, { withFileTypes: true }); } catch (e) { process.exit(0); }
+    const union = {};
+    for (const e of entries) {
+      if (!e.isDirectory() || !e.name.startsWith(".claude-") || e.name === ".claude-providers") continue;
+      const other = path.join(H, e.name);
+      if (path.resolve(other) === path.resolve(cfgdir)) continue;
+      let settings;
+      try { settings = JSON.parse(fs.readFileSync(path.join(other, "settings.json"), "utf8")); } catch (e) { continue; }
+      const ep = settings && settings.enabledPlugins;
+      if (Array.isArray(ep)) { for (const n of ep) if (typeof n === "string") union[n] = true; }
+      else if (ep && typeof ep === "object") { for (const k of Object.keys(ep)) if (ep[k]) union[k] = true; }
+    }
+    if (!Object.keys(union).length) process.exit(0);
+    const settingsPath = path.join(cfgdir, "settings.json");
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch (e) {}
+    const curEp = (cur.enabledPlugins && typeof cur.enabledPlugins === "object" && !Array.isArray(cur.enabledPlugins)) ? cur.enabledPlugins : {};
+    let changed = false;
+    for (const k of Object.keys(union)) {
+      if (curEp[k] === undefined) { curEp[k] = true; changed = true; }
+    }
+    if (!changed) process.exit(0);
+    cur.enabledPlugins = curEp;
+    const tmp = settingsPath + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(cur, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch (e) {}
+    fs.renameSync(tmp, settingsPath);
+  ' "$cfgdir" 2>/dev/null || true
+}
+
+# ---- register Context7 MCP into this station before ccx runs, if configured --
+# Mirrors bin/sidewrite's _sw_ensure_context7 (interactive `sidewrite code`
+# launch) — a headless-only/delegate-only provider never runs that path, so
+# without this a dashboard-configured Context7 key silently never reached
+# delegate stations. Idempotent; no-ops cleanly if no key is configured yet.
+_swrun_ensure_context7() {
+  local prov="$1" cfgdir="$HOME/.claude-$1"
+  [ -z "$prov" ] && return 0
+  mkdir -p "$cfgdir" 2>/dev/null || true
+  if CLAUDE_CONFIG_DIR="$cfgdir" claude mcp get context7 >/dev/null 2>&1; then
+    return 0
+  fi
+  local key
+  key="$(node -e '
+    try {
+      const store = require(process.argv[1]);
+      const r = store.readContext7Key();
+      if (r.apiKey) process.stdout.write(r.apiKey);
+    } catch (e) { /* no key configured yet, or store unreadable */ }
+  ' "$SCRIPTS_DIR/context7-store.cjs" 2>/dev/null)"
+  [ -z "$key" ] && return 0
+  CLAUDE_CONFIG_DIR="$cfgdir" claude mcp add --transport http --scope user context7 \
+    https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY: $key" >/dev/null 2>&1 || true
+}
+
+# ---- tiny jq-free helper: read a field from daemon.json ------------------
+_daemon_field() {
+  node -e '
+    const fs = require("fs");
+    const p = process.env.HOME + "/.sidewrite/daemon.json";
+    try {
+      const d = JSON.parse(fs.readFileSync(p, "utf8"));
+      const v = d[process.argv[1]];
+      process.stdout.write(v == null ? "" : String(v));
+    } catch (e) { /* silent: field stays empty */ }
+  ' "$1" 2>/dev/null || true
+}
+
+# ---- authenticated curl against the local daemon -------------------------
+_api() {
+  # usage: _api METHOD PATH [JSON_BODY]
+  local method="$1" path="$2" body="${3:-}"
+  local url="http://127.0.0.1:${PORT}${path}"
+  if [ -n "$body" ]; then
+    curl -sS -m 10 -X "$method" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$body" "$url" 2>/dev/null || true
+  else
+    curl -sS -m 10 -X "$method" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      "$url" 2>/dev/null || true
+  fi
+}
+
+# ---- extract a top-level string field from a JSON blob (stdin) -----------
+_json_field() {
+  node -e '
+    let s = "";
+    process.stdin.on("data", d => s += d).on("end", () => {
+      try { const o = JSON.parse(s); const v = o[process.argv[1]];
+            process.stdout.write(v == null ? "" : String(v)); }
+      catch (e) {}
+    });
+  ' "$1" 2>/dev/null || true
+}
+
+# ---- JSON-escape a shell string ------------------------------------------
+_json_str() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$1"
+}
+
+# ---- fail-closed read from config.json -----------------------------------
+# For "mode" this prints exactly subscription|standalone|unknown: any error,
+# missing/corrupt file, null, or unexpected value yields "unknown" (never a
+# bare "").  The bash layer enforces this regardless of node's behaviour.
+_config_field() {
+  local out
+  out="$(node -e '
+    const fs = require("fs");
+    const p = process.env.HOME + "/.sidewrite/config.json";
+    try {
+      const c = JSON.parse(fs.readFileSync(p, "utf8"));
+      const v = c[process.argv[1]];
+      process.stdout.write(v == null ? "" : String(v));
+    } catch (e) { /* silent: caller normalises */ }
+  ' "$1" 2>/dev/null)" || out=""
+  if [ "$1" = "mode" ] && [ "$out" != "subscription" ] && [ "$out" != "standalone" ]; then
+    out="unknown"
+  fi
+  printf '%s' "$out"
+}
+
+# =========================================================================
+# 1) ensure the daemon is started (process-manager handles the sqlite flag)
+#    Fast liveness check first (F3): if ~/.sidewrite/status.json is fresh, OR a
+#    1s curl to the unauthenticated, host-guarded /api/health returns 200, the
+#    daemon is already green — skip the ensure-started spawn+poll entirely.
+#
+#    ONE batched node read replaces the separate _config_field(mode) /
+#    _status_fresh / _daemon_field(port) / _daemon_field(token) spawns: it slurps
+#    config.json + daemon.json + status.json and prints
+#      mode <TAB> port <TAB> token <TAB> fresh(0|1) <TAB> speed(0|1)
+#    (speed feeds the --fast fallback in section 8). Fail-closed mode
+#    normalization stays in the bash layer below.
+# =========================================================================
+BOOT="$(node -e '
+  const fs = require("fs");
+  const H = process.env.HOME;
+  const rd = p => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) { return {}; } };
+  const cfg = rd(H + "/.sidewrite/config.json");
+  const dmn = rd(H + "/.sidewrite/daemon.json");
+  const st  = rd(H + "/.sidewrite/status.json");
+  const mode  = cfg.mode  == null ? "" : String(cfg.mode);
+  const port  = dmn.port  == null ? "" : String(dmn.port);
+  const token = dmn.token == null ? "" : String(dmn.token);
+  let fresh = 0;
+  const hb = Number(st.heartbeat_ts), ttl = Number(st.ttl_seconds);
+  if (isFinite(hb) && isFinite(ttl) && (Date.now() - hb <= ttl * 1000)) fresh = 1;
+  const speed = (cfg.speed === true || cfg.speed === "true") ? 1 : 0;
+  // Feature-flag layer (#3): the daemon PRE-RESOLVES every flag to a plain boolean
+  // in cfg.flags (the single authoritative surface for both readers). Read them
+  // FAIL-CLOSED to OFF here — any missing/corrupt/daemon-down state leaves cfg.flags
+  // absent, so both collapse to 0 (compiled-off). fast folds the legacy orphaned
+  // cfg.speed for back-compat; fullTools has no legacy source.
+  const flags = (cfg.flags && typeof cfg.flags === "object") ? cfg.flags : {};
+  const flagFast = (flags.fast === true || speed === 1) ? 1 : 0;
+  const flagFullTools = (flags.fullTools === true) ? 1 : 0;
+  // Newline-delimited: sequential `read`s below preserve EMPTY middle fields
+  // (a TAB/IFS-whitespace join collapses them, corrupting the daemon-down case).
+  process.stdout.write([mode, port, token, fresh, speed, flagFast, flagFullTools].join("\n"));
+' 2>/dev/null)" || BOOT=""
+{ read -r MODE; read -r PORT; read -r TOKEN; read -r FRESH; read -r CONFIG_SPEED; read -r FLAG_FAST; read -r FLAG_FULL_TOOLS; } <<EOF
+$BOOT
+EOF
+# Fail-closed mode: the "Continue on the subscription" handback fires ONLY when
+# this is DEFINITIVELY "subscription"; any error/null/unexpected value -> unknown.
+if [ "$MODE" != "subscription" ] && [ "$MODE" != "standalone" ]; then
+  MODE="unknown"
+fi
+[ -z "$FRESH" ] && FRESH=0
+[ -z "$CONFIG_SPEED" ] && CONFIG_SPEED=0
+# Fail-closed defaults for the daemon-resolved feature flags (#3): an empty/absent
+# field (daemon down, old daemon, corrupt config) reads as 0 -> compiled-off.
+[ -z "$FLAG_FAST" ] && FLAG_FAST=0
+[ -z "$FLAG_FULL_TOOLS" ] && FLAG_FULL_TOOLS=0
+
+DAEMON_UP=0
+if [ "$FRESH" = "1" ]; then
+  DAEMON_UP=1
+elif [ -n "$PORT" ] && \
+     [ "$(curl -s -m 1 -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:${PORT}/api/health" 2>/dev/null)" = "200" ]; then
+  DAEMON_UP=1
+fi
+
+if [ "$DAEMON_UP" -ne 1 ]; then
+  node "$PM" ensure-started >/dev/null 2>&1 || true
+  # daemon.json may have just been (re)written — re-read port/token.
+  PORT="$(_daemon_field port)"
+  TOKEN="$(_daemon_field token)"
+fi
+
+if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+  echo "sidewrite: could not read port/token from $DAEMON_JSON" >&2
+  echo "sidewrite: is the viewer daemon running? try:  node $PM status" >&2
+  exit 1
+fi
+VIEWER_URL="http://127.0.0.1:${PORT}"
+
+# =========================================================================
+# 2) parse args
+# =========================================================================
+PROVIDER=""
+MODEL=""
+PROMPT_ARG=""
+PROMPT_FILE=""
+TITLE=""
+FAST=0
+CONTEXT_FILE=""
+APPEND_CONTEXT=""
+LIVE_FLAG=0
+WORKERS_FILE=""
+FULL_TOOLS=0
+TOOLS_ALLOW=""
+PLAN_FILE=""
+CONTRACT_FILE=""
+PASSTHROUGH_FLAGS=()
+POSITIONAL=()
+# Parse ALL known flags first, regardless of position, so that only the
+# UNCONSUMED positionals are candidate provider/task (e.g. a --prompt-file
+# path is never mistaken for the provider name). Passthrough flags (--resume,
+# -c, --continue) are collected separately for forwarding to ccx in standalone mode.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --model)         MODEL="${2:-}"; shift 2 ;;
+    --model=*)       MODEL="${1#*=}"; shift ;;
+    --prompt)        PROMPT_ARG="${2:-}"; shift 2 ;;
+    --prompt=*)      PROMPT_ARG="${1#*=}"; shift ;;
+    --prompt-file)   PROMPT_FILE="${2:-}"; shift 2 ;;
+    --prompt-file=*) PROMPT_FILE="${1#*=}"; shift ;;
+    --title)         TITLE="${2:-}"; shift 2 ;;
+    --title=*)       TITLE="${1#*=}"; shift ;;
+    --fast)          FAST=1; shift ;;
+    --context-file)   CONTEXT_FILE="${2:-}"; shift 2 ;;
+    --context-file=*) CONTEXT_FILE="${1#*=}"; shift ;;
+    --append-context)   APPEND_CONTEXT="${2:-}"; shift 2 ;;
+    --append-context=*) APPEND_CONTEXT="${1#*=}"; shift ;;
+    --live|--yes)    LIVE_FLAG=1; shift ;;
+    --workers-file)   WORKERS_FILE="${2:-}"; shift 2 ;;
+    --workers-file=*) WORKERS_FILE="${1#*=}"; shift ;;
+    --full-tools)      FULL_TOOLS=1; shift ;;
+    --tools)           TOOLS_ALLOW="${2:-}"; shift 2 ;;
+    --tools=*)         TOOLS_ALLOW="${1#*=}"; shift ;;
+    --plan-file)       PLAN_FILE="${2:-}"; shift 2 ;;
+    --plan-file=*)     PLAN_FILE="${1#*=}"; shift ;;
+    --contract-file)   CONTRACT_FILE="${2:-}"; shift 2 ;;
+    --contract-file=*) CONTRACT_FILE="${1#*=}"; shift ;;
+    --resume=*|-r=*) PASSTHROUGH_FLAGS+=("${1}"); shift ;;
+    --resume|-r)
+      # session id is OPTIONAL; consume the next token ONLY when it looks like a
+      # session id: not another flag, not a provider registry name, and (since a
+      # real session id is a single whitespace-free token) not free-form task text.
+      PASSTHROUGH_FLAGS+=("${1}")
+      if [ "$#" -gt 1 ] && [ "${2#-}" = "$2" ] \
+         && [ "${2%%[[:space:]]*}" = "$2" ] \
+         && [ ! -f "$HOME/.claude-providers/${2}.env" ]; then
+        PASSTHROUGH_FLAGS+=("${2}"); shift
+      fi
+      shift ;;
+    --continue=*)    PASSTHROUGH_FLAGS+=("${1}"); shift ;;
+    --continue)      PASSTHROUGH_FLAGS+=("${1}"); shift ;;
+    -c=*)            PASSTHROUGH_FLAGS+=("${1}"); shift ;;
+    -c)              PASSTHROUGH_FLAGS+=("${1}"); shift ;;
+    -h|--help)
+      echo "Usage: sidewrite run [provider] [--model M] [--prompt TEXT | --prompt-file PATH] [--title SLUG]"
+      echo "                     [--fast] [--context-file PATH | --append-context TEXT] [--live]"
+      echo "                     [--workers-file PATH] [--full-tools] [--tools LIST]"
+      echo "                     [--plan-file PATH] [--contract-file PATH] [\"task...\"]"
+      exit 0 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+TASK=""
+if [ "${#POSITIONAL[@]}" -gt 0 ]; then
+  # first positional is the provider ONLY if it names a registry .env
+  # (passthrough flags are already consumed, so POSITIONAL[0] will never be a flag)
+  if [ -f "$HOME/.claude-providers/${POSITIONAL[0]}.env" ]; then
+    PROVIDER="${POSITIONAL[0]}"
+    TASK="${POSITIONAL[*]:1}"
+  else
+    TASK="${POSITIONAL[*]}"
+  fi
+fi
+
+# ---- build the implement BRIEF: --prompt > --prompt-file > stdin ----------
+# A non-empty BRIEF is a Claude-authored implement brief and makes PLAN.md
+# optional (see section 5). Stdin is only consulted when it is not a TTY and
+# neither --prompt nor --prompt-file was given.
+BRIEF=""
+if [ -n "$PROMPT_ARG" ]; then
+  BRIEF="$PROMPT_ARG"
+elif [ -n "$PROMPT_FILE" ]; then
+  if [ ! -f "$PROMPT_FILE" ]; then
+    echo "sidewrite: --prompt-file '$PROMPT_FILE' not found" >&2
+    exit 1
+  fi
+  BRIEF="$(cat "$PROMPT_FILE")"
+elif [ -z "$WORKERS_FILE" ] && [ ! -t 0 ]; then
+  # Parallel mode supplies per-worker briefs from the manifest, so it needs no
+  # top-level brief — and MUST NOT block reading stdin when invoked non-interactively.
+  BRIEF="$(cat)"
+fi
+
+# ---- fast/full-tools: CLI flag OR daemon-resolved feature flag (#3, read at BOOT).
+# FLAG_FAST already folds the legacy config.speed; CONFIG_SPEED is kept as a redundant
+# back-compat check so behaviour is identical even if an older daemon left cfg.flags
+# absent. Both gates only turn the flag ON — the CLI (--fast/--full-tools) always wins
+# upward, and a fail-closed 0 never turns anything off.
+if [ "$FAST" != "1" ] && { [ "$FLAG_FAST" = "1" ] || [ "$CONFIG_SPEED" = "1" ]; }; then
+  FAST=1
+fi
+if [ "$FULL_TOOLS" != "1" ] && [ "$FLAG_FULL_TOOLS" = "1" ]; then
+  FULL_TOOLS=1
+fi
+
+# Lean default --allowedTools (Area 1.1): a bash+edit core is near-SOTA on
+# SWE-bench; dropping web/browser/MCP distractors RAISES selection accuracy.
+# Applied as the DEFAULT (not --fast-gated); --full-tools opts back to the full
+# set, and a per-run `tools` allowlist (--tools / manifest) re-adds named tools.
+LEAN_TOOLS="Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,TodoWrite"
+
+# Prepend essential-skill bodies to the DIGEST (§3/§4.3). Reads
+# ~/.sidewrite/essential-skills.json, emits each skills[].path body in ARRAY
+# ORDER (stable), byte-stable (no dates/ids). Fail-soft: missing/corrupt => "".
+_essential_skills_digest() {
+  node -e '
+    const fs=require("fs");
+    const p=process.env.HOME+"/.sidewrite/essential-skills.json";
+    let data; try{ data=JSON.parse(fs.readFileSync(p,"utf8")); }catch(e){ process.exit(0); }
+    const skills=Array.isArray(data.skills)?data.skills:[];
+    const parts=[];
+    for(const s of skills){
+      if(!s||!s.path)continue;
+      let body; try{ body=fs.readFileSync(String(s.path),"utf8"); }catch(e){ continue; }
+      parts.push(body.replace(/\s+$/,""));
+    }
+    process.stdout.write(parts.join("\n\n"));
+  ' 2>/dev/null || true
+}
+
+# Byte-stability lint (Area 1.5): the DIGEST rides --append-system-prompt and
+# must be identical across runs so a future caching provider is not defeated.
+# Warns (never aborts — matches this file's fail-soft ethos) when volatile tokens
+# (run ids, ISO datetimes, bare epoch stamps) appear.
+_digest_lint() {
+  printf '%s' "$1" | grep -nEiq \
+    'run_[0-9]{6,}_[0-9]+|[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}|[^0-9][0-9]{10}[^0-9]' \
+    2>/dev/null && \
+    echo "sidewrite: warning — digest carries volatile content (dates/run-ids); this defeats provider prompt caching. Keep --append-system-prompt byte-stable." >&2
+  return 0
+}
+
+# ---- optional extra context digest appended to the implement system prompt ----
+# --context-file <path> (file contents) or --append-context <text>. Either, when
+# non-empty, is passed to ccx as --append-system-prompt in run_implement.
+DIGEST=""
+if [ -n "$CONTEXT_FILE" ]; then
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "sidewrite: --context-file '$CONTEXT_FILE' not found" >&2
+    exit 1
+  fi
+  DIGEST="$(cat "$CONTEXT_FILE")"
+elif [ -n "$APPEND_CONTEXT" ]; then
+  DIGEST="$APPEND_CONTEXT"
+fi
+
+# ---- canonical plan/contract inputs (Area 2.1): fail-closed if named+missing --
+PLAN_FILE_CONTENT=""
+CONTRACT_CONTENT=""
+if [ -n "$PLAN_FILE" ]; then
+  if [ ! -f "$PLAN_FILE" ]; then
+    echo "sidewrite: --plan-file '$PLAN_FILE' not found" >&2
+    exit 2
+  fi
+  PLAN_FILE_CONTENT="$(cat "$PLAN_FILE")"
+fi
+if [ -n "$CONTRACT_FILE" ]; then
+  if [ ! -f "$CONTRACT_FILE" ]; then
+    echo "sidewrite: --contract-file '$CONTRACT_FILE' not found" >&2
+    exit 2
+  fi
+  CONTRACT_CONTENT="$(cat "$CONTRACT_FILE")"
+fi
+
+# Context7 MCP steering (static, byte-stable): added ONLY when the user has
+# configured a Context7 key — the key itself never rides in the prompt (it's
+# registered via `claude mcp add`, not something the model needs to see), just
+# a nudge to actually call the tool proactively. Passive MCP availability alone
+# under-utilizes it for weaker/older-cutoff provider models, which is the whole
+# reason this feature exists — they'd otherwise keep writing library/API code
+# from stale training data. Static text only (no date/run-id) so it never trips
+# the byte-stability lint below.
+_context7_steer_line() {
+  node -e '
+    try {
+      const store = require(process.argv[1]);
+      if (store.redact().hasKey) {
+        process.stdout.write("When working with any external library, framework, SDK, or API, use the context7 MCP tools (resolve-library-id, then get-library-docs) to fetch current, version-pinned documentation before writing code from memory — even for well-known libraries. Do this proactively, not only when explicitly asked.");
+      }
+    } catch (e) { /* store unreadable -> no steer line */ }
+  ' "$SCRIPTS_DIR/context7-store.cjs" 2>/dev/null || true
+}
+
+# ---- assemble the final --append-system-prompt DIGEST in the FIXED order (§4.3):
+#   1) essential skill bodies  2) context digest  3) CONTRACT.md bytes  4) Context7 steer.
+# Reassembled ONCE globally so the single (:895) and parallel (:718) launches pass
+# the IDENTICAL ordered string (mandatory parity). Sections joined by one blank line.
+ESSENTIAL_DIGEST="$(_essential_skills_digest)"
+CONTEXT7_STEER="$(_context7_steer_line)"
+_assemble_digest() {
+  local out="" sec
+  for sec in "$ESSENTIAL_DIGEST" "$DIGEST" "$CONTRACT_CONTENT" "$CONTEXT7_STEER"; do
+    [ -z "$sec" ] && continue
+    if [ -z "$out" ]; then out="$sec"; else out="$(printf '%s\n\n%s' "$out" "$sec")"; fi
+  done
+  printf '%s' "$out"
+}
+DIGEST="$(_assemble_digest)"
+_digest_lint "$DIGEST"
+
+# =========================================================================
+# 3) resolve provider/model from /api/active when omitted
+# =========================================================================
+if [ -z "$PROVIDER" ] || [ -z "$MODEL" ]; then
+  ACTIVE="$(_api GET /api/active)"
+  if [ -z "$PROVIDER" ]; then
+    PROVIDER="$(printf '%s' "$ACTIVE" | _json_field provider)"
+  fi
+  if [ -z "$MODEL" ]; then
+    MODEL="$(printf '%s' "$ACTIVE" | _json_field model)"
+  fi
+fi
+
+if [ -z "$PROVIDER" ]; then
+  # No provider is configured/active. Emit clear, actionable in-chat guidance on
+  # STDOUT (so interactive Claude relays it verbatim) instead of a terse STDERR
+  # error — there is literally nothing to delegate to yet.
+  echo "SIDEWRITE: no provider is set up yet — there is nothing to delegate to."
+  echo ""
+  echo "ACTION — tell the user to do this, then retry:"
+  echo "  1) Run  sidewrite  (opens the dashboard)."
+  echo "  2) Add a provider (OpenRouter, or your own anthropic-compatible endpoint)."
+  echo "  3) Pick/activate a model for it."
+  echo "  Dashboard: ${VIEWER_URL:-http://127.0.0.1:1510}"
+  exit 2
+fi
+if [ ! -f "$HOME/.claude-providers/${PROVIDER}.env" ]; then
+  # Provider name resolved but its registry file is missing. Same treatment:
+  # actionable STDOUT guidance pointing at the dashboard, not a terse error.
+  echo "SIDEWRITE: provider '${PROVIDER}' is not set up — no registry file at ~/.claude-providers/${PROVIDER}.env."
+  echo ""
+  echo "ACTION — tell the user to do this, then retry:"
+  echo "  1) Run  sidewrite  (opens the dashboard)."
+  echo "  2) Add the '${PROVIDER}' provider (OpenRouter, or your own anthropic-compatible endpoint)."
+  echo "  3) Pick/activate a model for it."
+  echo "  Dashboard: ${VIEWER_URL:-http://127.0.0.1:1510}"
+  exit 2
+fi
+
+RUN_ID="run_$(date +%s)_$$"
+NOW="$(date +%s)"
+
+# =========================================================================
+# 3.5) project attribution (#9) — resolve ONCE, up front, so every event/cost of
+#      this run carries the same project_id. root = canonical realpath of the git
+#      toplevel (fallback: cwd); id = sha256(canonRoot)[:16]; name = basename.
+#      Fully fail-closed: git missing / not a repo / dir deleted -> cwd/raw path,
+#      NEVER aborts the run. These are LOCAL-ONLY dimensions — root_path/name stay
+#      in the daemon's sqlite; only the non-reversible project_id would ever key
+#      telemetry. Exported as SW_PROJECT_* below (the env the bridge reads) into
+#      BOTH the single-run and per-worker ccx|sj-bridge pipelines.
+#      pwd here == ORIG_DIR (no cd has happened yet; ORIG_DIR is set in §5).
+# =========================================================================
+PROJECT_CAP="$(SW_ORIG="$(pwd)" node -e '
+  const cp = require("child_process"), fs = require("fs");
+  const path = require("path"), crypto = require("crypto");
+  const orig = process.env.SW_ORIG || process.cwd();
+  let root = orig;
+  try {
+    // Bounded: 2s wall cap + 1MiB stdout cap; stderr/stdin ignored. Any failure
+    // (not a repo, git absent, submodule oddity) falls through to cwd fail-closed.
+    const out = cp.execFileSync("git", ["-C", orig, "rev-parse", "--show-toplevel"], {
+      timeout: 2000, maxBuffer: 1 << 20, encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const t = String(out).trim();
+    if (t) root = t;
+  } catch (e) { /* fail-closed: cwd */ }
+  let canon = root;
+  // realpathSync.native collapses symlink/case aliases (VS Code #313681) so a repo
+  // reached by two paths still maps to ONE project_id. Throws if the dir vanished
+  // mid-run -> fall back to the raw path (still deterministic).
+  try { canon = fs.realpathSync.native(root); } catch (e) { /* raw path */ }
+  let id = "", name = "";
+  try {
+    id = crypto.createHash("sha256").update(String(canon)).digest("hex").slice(0, 16);
+    name = path.basename(String(canon));
+  } catch (e) { /* leave empty -> attribution simply absent, never fatal */ }
+  // Newline-delimited. id is hex (newline-safe); the two path fields are base64
+  // so a canonical path containing a literal newline (legal on Unix) can never
+  // shift/truncate a field. base64 is newline-free, and empty fields survive.
+  const b64 = (s) => Buffer.from(String(s), "utf8").toString("base64");
+  process.stdout.write([id, b64(canon), b64(name)].join("\n"));
+' 2>/dev/null)" || PROJECT_CAP=""
+# `|| true`: on a totally-empty capture (node itself failed to run) the 2nd/3rd
+# `read` hit EOF and return non-zero — guard the group so `set -e` can't abort the
+# whole run over a fail-closed empty attribution (PROJECT_* just stay empty).
+{ read -r PROJECT_ID; read -r _PROOT_B64; read -r _PNAME_B64; } <<EOF || true
+$PROJECT_CAP
+EOF
+# Decode the base64 path fields (base64 -d works on macOS/BSD + GNU). Fail-closed:
+# a decode error leaves the value empty, never aborts. Command substitution keeps
+# any internal newline intact (it only trims a trailing one).
+PROJECT_ROOT="$([ -n "$_PROOT_B64" ] && printf '%s' "$_PROOT_B64" | base64 -d 2>/dev/null || true)"
+PROJECT_NAME="$([ -n "$_PNAME_B64" ] && printf '%s' "$_PNAME_B64" | base64 -d 2>/dev/null || true)"
+
+# run_init (#9): emitted BEFORE any other event so the daemon seeds its
+# run_id->project_id map and upserts the projects row up front — every later event
+# of this run (including the plan/plan_written below and the bridge's cost rows)
+# is then stamped with project_id. Fields are included only when non-empty, so a
+# fail-closed empty capture degrades to a plain, harmless run_init.
+_api POST /event "$(node -e '
+  const [rid, pid, proot, pname] = process.argv.slice(1);
+  const o = { run_id: rid, type: "run_init", stage: "plan" };
+  if (pid)   o.project_id   = pid;
+  if (proot) o.project_root = proot;
+  if (pname) o.project_name = pname;
+  process.stdout.write(JSON.stringify(o));
+' "$RUN_ID" "$PROJECT_ID" "$PROJECT_ROOT" "$PROJECT_NAME")" >/dev/null
+
+# =========================================================================
+# 4) plan stage started
+# =========================================================================
+_api POST /event "$(node -e '
+  const [rid, prov, model, task] = process.argv.slice(1);
+  process.stdout.write(JSON.stringify({
+    run_id: rid, type: "pipeline_stage_changed", stage: "plan",
+    status: "started", provider: prov, model, task
+  }));
+' "$RUN_ID" "$PROVIDER" "$MODEL" "$TASK")" >/dev/null
+
+# =========================================================================
+# 5) resolve the implement source: brief > PLAN.md > gate
+# =========================================================================
+ORIG_DIR="$(pwd)"
+PLAN_PATH=""
+if [ -n "$WORKERS_FILE" ]; then
+  # Parallel mode: each worker carries its own brief from the manifest, so no
+  # top-level brief/PLAN.md is required. (The manifest itself is validated at 8b.)
+  PLAN_SUMMARY="parallel workers: $WORKERS_FILE"
+elif [ -n "$BRIEF" ]; then
+  # A Claude-authored brief drives the run; PLAN.md is optional (copied into
+  # the worktree only if present).
+  [ -f "PLAN.md" ] && PLAN_PATH="$ORIG_DIR/PLAN.md"
+  PLAN_SUMMARY="$(printf '%s' "$BRIEF" | head -c 400 | tr '\n' ' ')"
+elif [ -f "PLAN.md" ]; then
+  PLAN_PATH="$ORIG_DIR/PLAN.md"
+  PLAN_SUMMARY="$(head -c 400 PLAN.md | tr '\n' ' ')"
+else
+  echo "sidewrite: no brief and no PLAN.md in $ORIG_DIR." >&2
+  echo "sidewrite: provide a brief with --prompt \"…\" or --prompt-file <path>," >&2
+  echo "sidewrite: or write a PLAN.md describing the change, then re-run sidewrite." >&2
+  echo "sidewrite:   (ask interactive Claude to draft a brief, e.g. /sidewrite-delegate)" >&2
+  exit 2
+fi
+
+# ---- canonical per-run artifacts (§4.1), mode 0600, never summarized ----------
+# Persist ONE canonical PLAN.md (+ CONTRACT.md) under ~/.sidewrite/runs/$RUN_ID/
+# (a subdirectory, distinct from the sibling runs/$RUN_ID.done file). These bytes
+# are cp'd verbatim into every worktree (.sidewrite/PLAN.md) so no paraphrase can
+# enter and every worker sees the identical plan/contract.
+RUN_ARTIFACT_DIR="$RUNS_DIR/$RUN_ID"
+CANON_PLAN=""
+CANON_PLAN_PATH=""
+CANON_CONTRACT_PATH=""
+if [ -n "$PLAN_FILE_CONTENT" ]; then
+  CANON_PLAN="$PLAN_FILE_CONTENT"
+elif [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ]; then
+  CANON_PLAN="$(cat "$PLAN_PATH")"
+fi
+if [ -n "$CANON_PLAN" ] || [ -n "$CONTRACT_CONTENT" ]; then
+  mkdir -p "$RUN_ARTIFACT_DIR" 2>/dev/null || true
+fi
+if [ -n "$CANON_PLAN" ]; then
+  CANON_PLAN_PATH="$RUN_ARTIFACT_DIR/PLAN.md"
+  ( umask 077; printf '%s' "$CANON_PLAN" > "$CANON_PLAN_PATH" ) 2>/dev/null || true
+  chmod 0600 "$CANON_PLAN_PATH" 2>/dev/null || true
+fi
+if [ -n "$CONTRACT_CONTENT" ]; then
+  CANON_CONTRACT_PATH="$RUN_ARTIFACT_DIR/CONTRACT.md"
+  ( umask 077; printf '%s' "$CONTRACT_CONTENT" > "$CANON_CONTRACT_PATH" ) 2>/dev/null || true
+  chmod 0600 "$CANON_CONTRACT_PATH" 2>/dev/null || true
+fi
+
+# =========================================================================
+# 6) plan_written
+# =========================================================================
+_api POST /event "$(node -e '
+  const [rid, path, summary, pid] = process.argv.slice(1);
+  const o = {
+    run_id: rid, type: "plan_written", stage: "plan",
+    plan_path: path, plan_summary: summary
+  };
+  if (pid) o.project_id = pid;  // #9 belt-and-suspenders: re-stamp if run_init was lost
+  process.stdout.write(JSON.stringify(o));
+' "$RUN_ID" "$PLAN_PATH" "$PLAN_SUMMARY" "$PROJECT_ID")" >/dev/null
+
+# =========================================================================
+# 7) git worktree + branch  sidewrite/<slug>  in a MANAGED hidden dir
+#    (~/.sidewrite/worktrees/<run_id>) — never a sibling folder in the
+#    project's parent. The autonomous model runs isolated here; on success
+#    its changes are applied BACK into the user's working tree (section 9).
+# =========================================================================
+# slug source: --title, else first line of the brief, else the task text
+SLUG_SRC="$TITLE"
+[ -z "$SLUG_SRC" ] && [ -n "$BRIEF" ] && SLUG_SRC="$(printf '%s' "$BRIEF" | head -n1)"
+[ -z "$SLUG_SRC" ] && SLUG_SRC="$TASK"
+SLUG="$(printf '%s' "$SLUG_SRC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | cut -c1-40)"
+[ -z "$SLUG" ] && SLUG="run-$$"
+BRANCH="sidewrite/${SLUG}"
+WORKDIR="$(pwd)"
+WORKTREE=""
+KEEP_WORKTREE=0
+BASE_SHA=""
+# Probe git ONCE here (in ORIG_DIR, before any cd into the worktree) and reuse
+# IS_GIT everywhere below instead of re-running rev-parse per call site.
+IS_GIT=0
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  IS_GIT=1
+  # NOTE: `git rev-parse HEAD` on an unborn repo PRINTS the literal "HEAD" (exit
+  # 128), which would poison BASE_SHA. `--verify` outputs nothing on failure.
+  BASE_SHA="$(git rev-parse --verify HEAD 2>/dev/null || echo '')"
+  # Unborn repo (git init but ZERO commits) => HEAD doesn't resolve. Fall back to
+  # git's empty-tree object so the worktree diff captures ALL files as additions
+  # and the end-of-run write-back still lands them into ORIG_DIR — otherwise the
+  # run silently reports "success" while the files stay stuck in the worktree.
+  [ -z "$BASE_SHA" ] && BASE_SHA="$(git hash-object -t tree /dev/null 2>/dev/null || echo '4b825dc642cb6eb9a060e54bf8d69288fbee4904')"
+fi
+
+# Remove the managed worktree + its throwaway branch. Safe to call repeatedly.
+# Honoured by the EXIT trap unless KEEP_WORKTREE=1 (set only when a successful
+# run could NOT be applied back and we must preserve the work for the user).
+_cleanup_worktree() {
+  [ -n "${WORKTREE:-}" ] || return 0
+  cd "$ORIG_DIR" 2>/dev/null || true
+  git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || rm -rf "$WORKTREE" 2>/dev/null || true
+  case "$BRANCH" in
+    sidewrite/*) git branch -D "$BRANCH" >/dev/null 2>&1 || true ;;
+  esac
+  git worktree prune >/dev/null 2>&1 || true
+}
+# P5 parallel: remove ALL of this run's per-worker worktrees ($RUN_ID-w*) and
+# their throwaway branches. In the single-worker path the glob matches nothing
+# and WORKER_BRANCHES is empty, so this is a no-op. Safe to call repeatedly.
+WORKER_BRANCHES=""
+_cleanup_workers() {
+  local wt b
+  cd "$ORIG_DIR" 2>/dev/null || true
+  for wt in "$HOME/.sidewrite/worktrees/$RUN_ID"-w*; do
+    [ -e "$wt" ] || continue
+    git worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt" 2>/dev/null || true
+  done
+  for b in $WORKER_BRANCHES; do
+    case "$b" in sidewrite/*) git branch -D "$b" >/dev/null 2>&1 || true ;; esac
+  done
+  git worktree prune >/dev/null 2>&1 || true
+}
+_on_exit() { [ "${KEEP_WORKTREE:-0}" = "1" ] && return 0; _cleanup_worktree; _cleanup_workers; }
+trap _on_exit EXIT
+
+if [ "$IS_GIT" = "1" ]; then
+  WT_BASE="$HOME/.sidewrite/worktrees"
+  mkdir -p "$WT_BASE"
+  WORKTREE="$WT_BASE/$RUN_ID"
+  if git worktree add -b "$BRANCH" "$WORKTREE" >/dev/null 2>&1; then
+    :
+  else
+    # branch may already exist — attach without -b
+    git worktree add "$WORKTREE" "$BRANCH" >/dev/null 2>&1 || \
+    git worktree add "$WORKTREE" >/dev/null 2>&1 || true
+  fi
+  if [ -d "$WORKTREE" ]; then
+    if [ -f PLAN.md ]; then
+      cp PLAN.md "$WORKTREE/PLAN.md" 2>/dev/null || true
+    fi
+    # §4.2: hand the canonical plan to the worktree at a fixed, non-clobbering
+    # path (.sidewrite/PLAN.md — never top-level, to avoid the repo's own PLAN.md).
+    if [ -n "$CANON_PLAN_PATH" ] && [ -f "$CANON_PLAN_PATH" ]; then
+      mkdir -p "$WORKTREE/.sidewrite" 2>/dev/null || true
+      cp "$CANON_PLAN_PATH" "$WORKTREE/.sidewrite/PLAN.md" 2>/dev/null || true
+    fi
+    if [ -f "$WORKTREE/.mcp.json" ]; then
+      echo "sidewrite: warning — worktree carries a .mcp.json; its MCP tool schemas (3k–25k tokens each) inflate every turn. Remove it or opt in with --full-tools." >&2
+    fi
+    cd "$WORKTREE"
+    WORKDIR="$WORKTREE"
+  else
+    WORKTREE=""   # worktree creation failed — treat as in-place below
+    echo "sidewrite: could not create an isolated worktree — implementing in place." >&2
+  fi
+else
+  echo "sidewrite: not a git repo — implementing in place (no worktree)." >&2
+  BRANCH="(no-git)"
+fi
+
+# ---- live-mirror decision + safety net (P2) ------------------------------
+# The bridge can mirror each applied edit straight into ORIG_DIR as it lands.
+# Enable that ONLY when it is safe to touch the user's tree: a git repo whose
+# working tree is clean, OR when the user explicitly opted in with --live/--yes.
+# Otherwise LIVE=0 and the end-of-run 3-way write-back (section 9) applies the
+# diff. A per-run backup dir holds pre-image bytes so `sidewrite undo` can revert.
+SIDEWRITE_BACKUP_DIR="$HOME/.sidewrite/runs/$RUN_ID.bak"
+mkdir -p "$SIDEWRITE_BACKUP_DIR" 2>/dev/null || true
+# Persist the run's ORIG_DIR so `sidewrite undo <id>` reverts against the RIGHT
+# tree from any cwd (written now, before any edit, so it survives a crash).
+printf '%s' "$ORIG_DIR" > "$HOME/.sidewrite/runs/$RUN_ID.origdir" 2>/dev/null || true
+LIVE=0
+if [ "$IS_GIT" = "1" ] && [ -n "${WORKTREE:-}" ]; then
+  if [ "$LIVE_FLAG" = "1" ]; then
+    LIVE=1
+  elif [ -z "$(git -C "$ORIG_DIR" status --porcelain 2>/dev/null)" ]; then
+    LIVE=1
+  fi
+fi
+# Global safety snapshot of ORIG_DIR (uncommitted work included) under a private
+# ref, so the user can always recover even outside the touched-file manifest.
+# Fully guarded — never fail the run.
+if [ "$IS_GIT" = "1" ]; then
+  PRE="$(git -C "$ORIG_DIR" stash create 2>/dev/null || true)"
+  git -C "$ORIG_DIR" update-ref "refs/sidewrite/pre/$RUN_ID" \
+    "${PRE:-$(git -C "$ORIG_DIR" rev-parse HEAD 2>/dev/null || echo '')}" 2>/dev/null || true
+fi
+
+# =========================================================================
+# 8) implement with automatic failover across providers
+#    Chain = the resolved provider/model first, then every OTHER configured
+#    provider (with its first model). Preflight each, run it, classify any
+#    failure, and on ANY failure (any provider, any reason) try the next.
+#    If every provider fails, hand the task back to interactive Claude.
+# =========================================================================
+PREFLIGHT="$SCRIPTS_DIR/preflight.cjs"
+CLASSIFY="$SCRIPTS_DIR/classify-failure.cjs"
+# Hard cap on a single attempt (env-overridable). Lowered from the old 900s: an
+# interactive delegate should not sit for 15 minutes.
+TIMEOUT="${SIDEWRITE_IMPLEMENT_TIMEOUT:-600}"
+# Idle/stall cap: if NO output flows (neither the stream-json heartbeat nor the
+# provider's stderr) for this many seconds, the provider is stalled/trickling
+# (e.g. a tiny :free model) and the attempt is killed and classified as timeout,
+# instead of burning the full hard cap.
+IDLE_TIMEOUT="${SIDEWRITE_IMPLEMENT_IDLE:-120}"
+START_DIR="$ORIG_DIR"
+
+# Portable mtime (epoch secs) of a file: BSD/macOS `stat -f %m`, GNU `stat -c %Y`.
+_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+# Build the implement PROMPT. When a brief drives the run, wrap it in the
+# shipped skeleton (plugin/prompts/implement.md) with the literal token
+# {{TASK}} replaced by the brief (split/join keeps regex/special chars safe).
+# Fall back to a minimal wrapper if the skeleton is missing. Only a PLAN.md
+# run keeps the original "Implement the plan described in PLAN.md…" wording.
+if [ -n "$BRIEF" ]; then
+  SKELETON="$ROOT_DIR/plugin/prompts/implement.md"
+  if [ -f "$SKELETON" ]; then
+    # Pure-bash token substitution (no node spawn): slurp the skeleton and
+    # replace every literal {{TASK}} with the brief. Parameter-expansion
+    # replacement treats both sides as plain strings, so regex/special chars in
+    # the brief are safe.
+    SKEL="$(<"$SKELETON")"
+    PROMPT="${SKEL//\{\{TASK\}\}/$BRIEF}"
+  else
+    PROMPT="$BRIEF
+Leave the changes applied in the working tree. Do not commit."
+  fi
+else
+  PROMPT="Implement the plan described in PLAN.md in this repository. Read PLAN.md, make all the code changes it specifies, and leave the working tree with the changes applied. Do not commit."
+fi
+
+# first model of a provider (from its CCX_MODELS), or empty
+_first_model() {
+  node -e '
+    const fs=require("fs"),os=require("os"),path=require("path");
+    const HOME=process.env.HOME||os.homedir();
+    try{
+      const raw=fs.readFileSync(path.join(HOME,".claude-providers",process.argv[1]+".env"),"utf8");
+      for(const line of raw.split(/\r?\n/)){const t=line.trim();if(!t||t.startsWith("#"))continue;const i=t.indexOf("=");if(i<0)continue;let k=t.slice(0,i).trim();if(k.startsWith("export "))k=k.slice(7).trim();if(k!=="CCX_MODELS")continue;let v=t.slice(i+1).trim();if(v.length>=2&&v[0]===String.fromCharCode(34)&&v.endsWith(String.fromCharCode(34)))v=v.slice(1,-1);const _a=v.split(",").map(s=>s.trim()).filter(Boolean);const m=_a.find(x=>!/:free$/.test(x))||_a[0];process.stdout.write(m||"");}
+    }catch(e){}
+  ' "$1" 2>/dev/null || true
+}
+
+# fast transform of an implement model slug (contract 6): strip a trailing
+# ":free"; if it carries no routing suffix (:nitro/:floor) append ":nitro".
+# Applies to the implement model only.
+_fast_model() {
+  local m="$1"
+  case "$m" in *:free) m="${m%:free}" ;; esac
+  case "$m" in
+    *:nitro|*:floor) : ;;
+    *) m="${m}:nitro" ;;
+  esac
+  printf '%s' "$m"
+}
+
+# =========================================================================
+# 8b) P5 PARALLEL MODE — file-disjoint concurrent workers
+#     Engaged ONLY when --workers-file names a readable manifest that parses to
+#     >=2 workers with file-disjoint ownership. Each worker gets its own
+#     worktree + branch and runs one ccx|sj-bridge implement, live-mirroring
+#     ONLY its own files into ORIG_DIR (SIDEWRITE_ALLOW). Because the slices are
+#     disjoint there is no cross-worker merge. <2 workers => fall through to the
+#     normal single-worker path below; overlapping slices => hard error (exit 2).
+# =========================================================================
+PARALLEL=0
+WORKER_RECORDS=""
+WORKER_TMPDIR=""
+if [ -n "$WORKERS_FILE" ] && [ -r "$WORKERS_FILE" ]; then
+  WORKER_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/sidewrite-wf-$$.XXXXXX")"
+  set +e
+  WORKER_RECORDS="$(node -e '
+    const fs=require("fs"), path=require("path");
+    const wf=process.argv[1], origDir=process.argv[2]||process.cwd(), tmpDir=process.argv[3]||".";
+    let data;
+    try { data=JSON.parse(fs.readFileSync(wf,"utf8")); }
+    catch(e){ process.stderr.write("sidewrite: cannot parse --workers-file ("+wf+"): "+e.message+"\n"); process.exit(2); }
+    const workers=Array.isArray(data.workers)?data.workers:[];
+    if(workers.length<2) process.exit(3);
+    const slug=s=>String(s==null?"":s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+/,"").replace(/-+$/,"").slice(0,40);
+    // Normalize EXACTLY like sj-bridge (path.normalize) so disjointness is decided
+    // on the same rel-paths the ALLOW filter uses — collapse ../ . // segments.
+    const strip=p=>path.posix.normalize(String(p)).replace(/\/+$/,"").replace(/^\.$/,"");
+    const recs=[];
+    for(let i=0;i<workers.length;i++){
+      const w=workers[i]||{};
+      const files=(Array.isArray(w.files)?w.files:[]).map(f=>String(f).trim()).filter(Boolean);
+      if(files.length===0){ process.stderr.write("sidewrite: worker "+i+" declares no files[] ownership; parallel mode needs explicit disjoint file ownership.\n"); process.exit(2); }
+      recs.push({ idx:i, title:(slug(w.title)||("w"+i)), files, brief:w.brief, brief_file:w.brief_file, plan_sections:w.plan_sections, tools:w.tools });
+    }
+    const conflict=(a,b)=>{ const na=strip(a), nb=strip(b); return na===nb || nb.indexOf(na+"/")===0 || na.indexOf(nb+"/")===0; };
+    for(let i=0;i<recs.length;i++) for(let j=i+1;j<recs.length;j++)
+      for(const a of recs[i].files) for(const b of recs[j].files)
+        if(conflict(a,b)){
+          process.stderr.write("sidewrite: worker slices are NOT file-disjoint. worker "+i+" ("+recs[i].title+") path ["+a+"] overlaps worker "+j+" ("+recs[j].title+") path ["+b+"].\n");
+          process.stderr.write("sidewrite: make the slices disjoint (no path may equal or nest under another workers path) and re-run.\n");
+          process.exit(2);
+        }
+    const out=[];
+    for(const r of recs){
+      let bf="";
+      if(r.brief_file){
+        bf=path.isAbsolute(r.brief_file)?r.brief_file:path.join(origDir,r.brief_file);
+        if(!fs.existsSync(bf)){ process.stderr.write("sidewrite: worker "+r.idx+" brief_file not found: "+bf+"\n"); process.exit(2); }
+      } else if(typeof r.brief==="string" && r.brief.trim()){
+        bf=path.join(tmpDir,"worker-"+r.idx+".md");
+        fs.writeFileSync(bf, r.brief, { mode:0o600 });
+      } else {
+        process.stderr.write("sidewrite: worker "+r.idx+" has neither brief nor brief_file.\n"); process.exit(2);
+      }
+      if(r.title.indexOf("\t")>=0 || bf.indexOf("\t")>=0 || r.files.join(",").indexOf("\t")>=0){
+        process.stderr.write("sidewrite: worker fields must not contain tabs.\n"); process.exit(2);
+      }
+      // Area 1/2: per-worker plan_sections (pointer into .sidewrite/PLAN.md) and a
+      // tools allowlist (re-adds named tools atop LEAN_TOOLS). Tab-stripped so the
+      // 6-column TSV stays parseable.
+      const secs=(Array.isArray(r.plan_sections)?r.plan_sections.join(","):String(r.plan_sections||"")).replace(/\t/g," ").trim();
+      const tools=(Array.isArray(r.tools)?r.tools.join(","):String(r.tools||"")).replace(/[\t ,]+/g,",").replace(/^,|,$/g,"");
+      out.push([r.idx, r.title, bf, r.files.join(","), secs, tools].join("\t"));
+    }
+    process.stdout.write(out.join("\n"));
+  ' "$WORKERS_FILE" "$ORIG_DIR" "$WORKER_TMPDIR")"
+  WPRC=$?
+  set -e
+  if [ "$WPRC" = "0" ]; then
+    PARALLEL=1
+  elif [ "$WPRC" = "3" ]; then
+    : # fewer than 2 workers — fall through to the single-worker path
+  else
+    # parse error / non-disjoint slices — node printed the reason to stderr
+    exit 2
+  fi
+fi
+
+# Launch worker $1 (index into the W_* arrays) as ONE self-contained background
+# subshell: create its worktree, wrap its brief in the implement skeleton, run
+# the ccx|sj-bridge pipeline with a per-worker idle+hard watchdog, and record
+# its exit rc to $WORKER_RC_DIR/w<i>.rc. Worktree creation stays in the caller
+# (foreground) so the pool serializes git-index writes; the & backgrounds only
+# the pipeline. Caller reads $! for the pool bookkeeping.
+launch_worker() {
+  local k="$1"
+  local i="${W_IDX[$k]}" title="${W_TITLE[$k]}" brief_file="${W_BRIEF_FILE[$k]}" files="${W_FILES[$k]}"
+  local sections="${W_SECTIONS[$k]}" wtools="${W_TOOLS[$k]}"
+  local wt="$WT_BASE/$RUN_ID-w$i"
+  local branch="sidewrite/${title}-w${i}"
+  WORKER_BRANCHES="$WORKER_BRANCHES $branch"
+  # Create the worktree from ORIG_DIR HEAD (serialized by the pool -> no lock race).
+  git worktree add -b "$branch" "$wt" >/dev/null 2>&1 || \
+  git worktree add "$wt" "$branch" >/dev/null 2>&1 || \
+  git worktree add "$wt" >/dev/null 2>&1 || true
+  # §4.2: hand the canonical plan to this worker at .sidewrite/PLAN.md (identical
+  # bytes across all workers — no paraphrase can enter).
+  if [ -n "$CANON_PLAN_PATH" ] && [ -f "$CANON_PLAN_PATH" ]; then
+    mkdir -p "$wt/.sidewrite" 2>/dev/null || true
+    cp "$CANON_PLAN_PATH" "$wt/.sidewrite/PLAN.md" 2>/dev/null || true
+  fi
+  # Wrap this worker's brief in the shipped implement skeleton (same as single path).
+  local wbrief wprompt
+  wbrief="$(cat "$brief_file" 2>/dev/null)"
+  if [ -n "$SKEL" ]; then
+    wprompt="${SKEL//\{\{TASK\}\}/$wbrief}"
+  else
+    wprompt="$wbrief
+Leave the changes applied in the working tree. Do not commit."
+  fi
+  # Area 2.4: the brief is a pointer — prepend the plan-section anchor + authority note.
+  if [ -n "$sections" ]; then
+    wprompt="Implement section(s) ${sections} of .sidewrite/PLAN.md (the canonical plan). CONTRACT.md in your system prompt is authoritative for shared interfaces.
+
+$wprompt"
+  fi
+  # Per-worker allowedTools: lean default + run-level --tools + this worker's own
+  # manifest tools (skipped entirely under --full-tools).
+  local -a w_extra=( "${CCX_EXTRA[@]}" )
+  if [ "$FULL_TOOLS" != "1" ]; then
+    local _wt_tools="$LEAN_TOOLS"
+    [ -n "$TOOLS_ALLOW" ] && _wt_tools="$_wt_tools,$TOOLS_ALLOW"
+    [ -n "$wtools" ] && _wt_tools="$_wt_tools,$wtools"
+    w_extra+=( --allowedTools "$_wt_tools" )
+  fi
+  local allow; allow="$(printf '%s' "$files" | tr ',' '\n')"
+  # per-worker lane: implement started
+  _api POST /event "$(node -e 'const[r,p,m,w,t]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"pipeline_stage_changed",stage:"implement",status:"started",provider:p,model:m,worker:Number(w),title:t}))' "$RUN_ID" "$PROVIDER" "$MODEL" "$i" "$title")" >/dev/null
+  (
+    set +e
+    local_err="$(mktemp "${TMPDIR:-/tmp}/sidewrite-werr-$$.XXXXXX")"
+    local_hb="$(mktemp "${TMPDIR:-/tmp}/sidewrite-whb-$$.XXXXXX")"
+    local_rc="$(mktemp "${TMPDIR:-/tmp}/sidewrite-wrc-$$.XXXXXX")"
+    : > "$local_hb"
+    (
+      # Live-mirror contract + this worker's OWN slice (SIDEWRITE_ALLOW) so the
+      # bridge mirrors only this worker's files into ORIG_DIR (disjoint => safe).
+      export SIDEWRITE_HB_FILE="$local_hb" \
+             SIDEWRITE_WORKTREE="$wt" \
+             SIDEWRITE_ORIG_DIR="$ORIG_DIR" \
+             SIDEWRITE_RUN_ID="$RUN_ID" \
+             SIDEWRITE_BACKUP_DIR="$SIDEWRITE_BACKUP_DIR" \
+             SIDEWRITE_LIVE="$LIVE" \
+             SIDEWRITE_ALLOW="$allow" \
+             SW_PROJECT_ID="$PROJECT_ID" \
+             SW_PROJECT_ROOT="$PROJECT_ROOT" \
+             SW_PROJECT_NAME="$PROJECT_NAME"
+      _swrun_ensure_skills "$PROVIDER"
+      _swrun_ensure_context7 "$PROVIDER"
+      "$CCX" "$PROVIDER" -p "$wprompt" --model "$MODEL" "${w_extra[@]}" --dangerously-skip-permissions --output-format stream-json --verbose 2> "$local_err" \
+        | node "$SJ_BRIDGE" --run-id "$RUN_ID" --provider "$PROVIDER" --model "$MODEL" --worker "$i"
+      echo "${PIPESTATUS[0]}" > "$local_rc"
+    ) &
+    jobpid=$!
+    start="$(date +%s)"
+    while kill -0 "$jobpid" 2>/dev/null; do
+      sleep 5
+      now="$(date +%s)"
+      if [ $((now - start)) -ge "$TIMEOUT" ]; then break; fi
+      hbm="$(_mtime "$local_hb")"; em="$(_mtime "$local_err")"
+      last="$hbm"; [ "$em" -gt "$last" ] 2>/dev/null && last="$em"
+      if [ $((now - last)) -ge "$IDLE_TIMEOUT" ]; then break; fi
+      # Fast-fail on unrecoverable provider errors (see run_implement).
+      if grep -qiE 'HTTP 402|insufficient[ _-]?credit|no credit|payment required|quota|HTTP 401|invalid[ _-]?api[ _-]?key|unauthorized|forbidden' "$local_err" 2>/dev/null; then break; fi
+    done
+    kill -TERM "$jobpid" 2>/dev/null; pkill -TERM -P "$jobpid" 2>/dev/null
+    wait "$jobpid" 2>/dev/null
+    st="$(cat "$local_rc" 2>/dev/null)"; [ -z "$st" ] && st=143
+    echo "$st" > "$WORKER_RC_DIR/w$i.rc"
+    cat "$local_err" >> "$HOME/.sidewrite/RUN_LOG" 2>/dev/null || true
+    rm -f "$local_err" "$local_hb" "$local_rc"
+  ) &
+}
+
+if [ "$PARALLEL" = "1" ]; then
+  if [ "$IS_GIT" != "1" ]; then
+    echo "sidewrite: --workers-file parallel mode requires a git repository (per-worker worktrees). Aborting." >&2
+    exit 2
+  fi
+
+  # Cost-budget pre-flight (mirrors §8a below, single-worker path) — this mode
+  # calls launch_worker directly and `exit 0`s long before §8a's gate is ever
+  # reached, so without this duplicate check here `--workers-file` dispatched
+  # every worker regardless of budgets.enforce. See §8a's comment for why
+  # estUsd is omitted (unknown cost only warns, never blocks) and why a
+  # network hiccup fails open (empty response is not the literal "false").
+  BUDGET_CHECK="$(_api GET "/api/budget/check?run_id=${RUN_ID}")"
+  BUDGET_ALLOW="$(printf '%s' "$BUDGET_CHECK" | _json_field allow)"
+  if [ "$BUDGET_ALLOW" = "false" ]; then
+    _api POST /event "$(node -e 'const[r]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"budget_blocked",stage:"implement",reason:"budget_exceeded"}))' "$RUN_ID")" >/dev/null
+    echo "sidewrite: run blocked by monthly/per-run cost budget (enforce=true); see Budgets page" >&2
+    echo "Viewer: $VIEWER_URL" >&2
+    exit 1
+  fi
+
+  # Section 7 created + entered a single worktree; parallel mode does not use it.
+  # Return to ORIG_DIR and drop it. The shared snapshot/backup/origdir sidecar
+  # (refs/sidewrite/pre, $RUN_ID.bak, $RUN_ID.origdir) all stay as-is.
+  cd "$ORIG_DIR" 2>/dev/null || true
+  if [ -n "${WORKTREE:-}" ]; then _cleanup_worktree; fi
+  WORKTREE=""
+  WT_BASE="$HOME/.sidewrite/worktrees"; mkdir -p "$WT_BASE"
+  WORKER_RC_DIR="$HOME/.sidewrite/runs/$RUN_ID.wrc"; mkdir -p "$WORKER_RC_DIR"
+  [ -f "$ORIG_DIR/.mcp.json" ] && echo "sidewrite: warning — repo carries a .mcp.json; its MCP tool schemas (3k–25k tokens each) inflate every worker turn. Remove it or opt in with --full-tools." >&2
+
+  # Resolve the implement model from the provider's first CCX_MODELS entry when
+  # it was omitted (--model). The failover CHAIN that normally does this is below
+  # and is skipped in parallel mode, so resolve it here before launching workers.
+  [ -z "$MODEL" ] && MODEL="$(_first_model "$PROVIDER")"
+
+  # Keep a free-tier shared model as chosen; just warn (same policy as run_implement).
+  case "$MODEL" in
+    *:free)
+      echo "sidewrite: note — '$MODEL' is a FREE tier (rate-limited/slow); large parallel jobs may time out. Use --fast or a paid model for big jobs." >&2
+      ;;
+  esac
+
+  # Fast mode transforms the shared implement model slug (same rule as run_implement).
+  if [ "$FAST" = "1" ]; then
+    _pfm="$(_fast_model "$MODEL")"
+    if [ "$_pfm" != "$MODEL" ]; then
+      echo "sidewrite: fast mode — implement model ${MODEL} -> ${_pfm}" >&2
+      MODEL="$_pfm"
+    fi
+  fi
+  # Shared ccx implement flags (mirror run_implement's CCX_EXTRA). $DIGEST already
+  # carries essentials+context+CONTRACT.md in §4.3 order, so every worker's
+  # --append-system-prompt gets the contract byte-identical to the single path.
+  # allowedTools is built PER WORKER in launch_worker (lean default + per-worker tools).
+  CCX_EXTRA=( --include-partial-messages )
+  [ -n "$DIGEST" ] && CCX_EXTRA+=( --append-system-prompt "$DIGEST" )
+  # Implement skeleton (same wrap as the single-worker path).
+  SKEL=""
+  _SKEL_PATH="$ROOT_DIR/plugin/prompts/implement.md"
+  [ -f "$_SKEL_PATH" ] && SKEL="$(<"$_SKEL_PATH")"
+
+  # Parse the emitted worker records into parallel arrays (6-column TSV).
+  W_IDX=(); W_TITLE=(); W_BRIEF_FILE=(); W_FILES=(); W_SECTIONS=(); W_TOOLS=()
+  while IFS="$(printf '\t')" read -r _wi _wt _wb _wf _wp _wtools; do
+    [ -z "$_wi" ] && continue
+    W_IDX+=("$_wi"); W_TITLE+=("$_wt"); W_BRIEF_FILE+=("$_wb"); W_FILES+=("$_wf"); W_SECTIONS+=("$_wp"); W_TOOLS+=("$_wtools")
+  done <<EOF
+$WORKER_RECORDS
+EOF
+  NWORKERS=${#W_IDX[@]}
+
+  # Concurrency cap = min(N, nproc-1 clamped to [1,4]), unless the dashboard's
+  # Sub-agents page has set config.json's parallel.maxConcurrency — an explicit
+  # user override always wins over the nproc-based default.
+  _cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+  POOL=$((_cpus - 1)); [ "$POOL" -lt 1 ] && POOL=1; [ "$POOL" -gt 4 ] && POOL=4
+  _max_conc="$(node -e '
+    const fs = require("fs");
+    try {
+      const c = JSON.parse(fs.readFileSync(process.env.HOME + "/.sidewrite/config.json", "utf8"));
+      const v = c && c.parallel && c.parallel.maxConcurrency;
+      if (Number.isInteger(v) && v > 0) process.stdout.write(String(v));
+    } catch (e) { /* fall through to the nproc-based default */ }
+  ' 2>/dev/null)"
+  [ -n "$_max_conc" ] && POOL="$_max_conc"
+  [ "$POOL" -gt "$NWORKERS" ] && POOL="$NWORKERS"
+  [ "$POOL" -lt 1 ] && POOL=1
+
+  echo "sidewrite: parallel mode — ${NWORKERS} disjoint workers, up to ${POOL} concurrent (provider=${PROVIDER} model=${MODEL})." >&2
+
+  # run_workers roster (§1.3): ONE authoritative fan-out event (worker=int, title=slug),
+  # emitted after W_IDX/W_TITLE are populated and before any launch_worker.
+  _roster_args=()
+  for k in $(seq 0 $((NWORKERS - 1))); do
+    _roster_args+=( "${W_IDX[$k]}" "${W_TITLE[$k]}" )
+  done
+  _api POST /event "$(node -e '
+    const [rid,prov,model]=process.argv.slice(1,4);
+    const rest=process.argv.slice(4);
+    const workers=[];
+    for(let i=0;i<rest.length;i+=2) workers.push({worker:Number(rest[i]), title:rest[i+1]});
+    process.stdout.write(JSON.stringify({type:"run_workers", run_id:rid, provider:prov, model, workers, ts:Date.now()}));
+  ' "$RUN_ID" "$PROVIDER" "$MODEL" "${_roster_args[@]}")" >/dev/null
+
+  # Bounded job pool (bash 3.2: no `wait -n`, so FIFO-wait on the oldest PID when
+  # the pool is full). Each worker records its own rc file, so we never need the
+  # exit status from `wait` itself.
+  PIDS=()
+  for k in $(seq 0 $((NWORKERS - 1))); do
+    launch_worker "$k"
+    PIDS+=("$!")
+    if [ "${#PIDS[@]}" -ge "$POOL" ]; then
+      wait "${PIDS[0]}" 2>/dev/null || true
+      PIDS=("${PIDS[@]:1}")
+    fi
+  done
+  for _p in "${PIDS[@]}"; do wait "$_p" 2>/dev/null || true; done
+
+  # ---- combined report: per-worker diff-stat, non-live write-back, events ----
+  FINISHED="$(date +%s)"
+  SUCC_COUNT=0; FAIL_COUNT=0; CONFLICT=0
+  # Atomic write-back (Area 2.5): collect every successful worker's slice patch
+  # here and apply them all-or-nothing AFTER the loop (never inline), so a
+  # mid-loop conflict can never leave a half-applied tree.
+  STAGED_PATCHES=()
+  echo ""
+  echo "SIDEWRITE PARALLEL RUN — ${NWORKERS} workers (provider=${PROVIDER} model=${MODEL})"
+  for k in $(seq 0 $((NWORKERS - 1))); do
+    i="${W_IDX[$k]}"; title="${W_TITLE[$k]}"
+    wt="$WT_BASE/$RUN_ID-w$i"
+    branch="sidewrite/${title}-w${i}"
+    rc="$(cat "$WORKER_RC_DIR/w$i.rc" 2>/dev/null)"; [ -z "$rc" ] && rc=1
+    dstat="(no changes)"
+    # Restrict staging + diff to THIS worker's declared slice (a pathspec), so the
+    # non-live write-back honors the SAME disjoint ownership the live mirror
+    # enforces via SIDEWRITE_ALLOW: an out-of-slice write never reaches ORIG_DIR,
+    # and two workers can never clobber a shared out-of-slice file.
+    _fp=()
+    [ -n "${W_FILES[$k]}" ] && IFS=',' read -ra _fp <<< "${W_FILES[$k]}"
+    if [ -d "$wt" ] && [ "${#_fp[@]}" -gt 0 ]; then
+      git -C "$wt" add -- "${_fp[@]}" >/dev/null 2>&1 || true
+      ss="$(git -C "$wt" diff --cached --shortstat -- "${_fp[@]}" 2>/dev/null | sed 's/^ *//')"
+      [ -n "$ss" ] && dstat="$ss"
+    fi
+    if [ "$rc" = "0" ]; then
+      wstatus="success"; SUCC_COUNT=$((SUCC_COUNT + 1)); wreason="ok"
+      # LIVE==0: the worker changes are in its worktree only. STAGE its slice diff
+      # (disjoint slices => no cross-worker clash); the atomic apply after the loop
+      # write-backs all successful slices at once, or none.
+      if [ "$LIVE" != "1" ] && [ -d "$wt" ] && [ -n "$BASE_SHA" ] && [ "${#_fp[@]}" -gt 0 ]; then
+        patch="$(mktemp "${TMPDIR:-/tmp}/sidewrite-wpatch-$$.XXXXXX")"
+        if git -C "$wt" diff --cached --binary "$BASE_SHA" -- "${_fp[@]}" > "$patch" 2>/dev/null && [ -s "$patch" ]; then
+          STAGED_PATCHES+=("$patch")
+        else
+          rm -f "$patch"
+        fi
+      fi
+    else
+      wstatus="failed"; FAIL_COUNT=$((FAIL_COUNT + 1)); wreason="failed"
+    fi
+    printf 'worker %s %s: %s diff=%s\n' "$i" "$title" "$wstatus" "$dstat"
+    _api POST /event "$(node -e 'const[r,p,m,b,d,s,rs,w,t]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"implement_finished",stage:"implement",provider:p,model:m,branch:b,diff_stat:d,status:s==="success"?"success":"implement_failed",reason:rs,worker:Number(w),title:t}))' "$RUN_ID" "$PROVIDER" "$MODEL" "$branch" "$dstat" "$wstatus" "$wreason" "$i" "$title")" >/dev/null
+  done
+
+  # ---- ATOMIC all-or-nothing write-back (Area 2.5) ------------------------------
+  # Dry-run --check EVERY staged slice against ORIG_DIR first; only if all pass do
+  # we apply them all. If any check fails, apply NONE (CONFLICT=1). If an apply
+  # still fails after its check passed (raced tree), reverse-apply everything
+  # already applied so ORIG_DIR is left exactly as it was — never half-applied.
+  if [ "$LIVE" != "1" ] && [ "${#STAGED_PATCHES[@]}" -gt 0 ]; then
+    _apply_ok=1
+    for _p in "${STAGED_PATCHES[@]}"; do
+      git -C "$ORIG_DIR" apply --check --3way --whitespace=nowarn "$_p" >/dev/null 2>&1 || \
+      git -C "$ORIG_DIR" apply --check --whitespace=nowarn "$_p" >/dev/null 2>&1 || { _apply_ok=0; break; }
+    done
+    if [ "$_apply_ok" = "1" ]; then
+      _applied=()
+      for _p in "${STAGED_PATCHES[@]}"; do
+        if git -C "$ORIG_DIR" apply --3way --whitespace=nowarn "$_p" >/dev/null 2>&1 || \
+           git -C "$ORIG_DIR" apply --whitespace=nowarn "$_p" >/dev/null 2>&1; then
+          _applied+=("$_p")
+        else
+          for _q in "${_applied[@]}"; do
+            git -C "$ORIG_DIR" apply -R --whitespace=nowarn "$_q" >/dev/null 2>&1 || true
+          done
+          CONFLICT=1; break
+        fi
+      done
+    else
+      CONFLICT=1
+    fi
+  fi
+  for _p in "${STAGED_PATCHES[@]}"; do rm -f "$_p" 2>/dev/null || true; done
+
+  OVERALL="partial"
+  [ "$SUCC_COUNT" = "$NWORKERS" ] && OVERALL="success"
+  [ "$SUCC_COUNT" = "0" ] && OVERALL="implement_failed"
+  DIFF_SUMMARY="${SUCC_COUNT}/${NWORKERS} workers succeeded"
+
+  # Run-level .done marker (mirrors the single-path shape; branch=(parallel)).
+  node -e '
+    const fs=require("fs");
+    const [rid,prov,model,status,summary,started,finished,n,succ]=process.argv.slice(1);
+    fs.writeFileSync(process.env.HOME+"/.sidewrite/runs/"+rid+".done", JSON.stringify({
+      run_id:rid, provider:prov, model, branch:"(parallel)", diff_stat:summary,
+      status, reason: status==="success"?"ok":(status==="partial"?"partial":"all_failed"),
+      workers:Number(n), succeeded:Number(succ),
+      started_at:Number(started), finished_at:Number(finished)
+    }, null, 2), { mode:0o600 });
+  ' "$RUN_ID" "$PROVIDER" "$MODEL" "$OVERALL" "$DIFF_SUMMARY" "$NOW" "$FINISHED" "$NWORKERS" "$SUCC_COUNT"
+
+  # Clean up ALL worker worktrees + branches, UNLESS a non-live patch conflicted
+  # (then keep everything so the user can recover the work manually).
+  if [ "$CONFLICT" = "1" ]; then
+    KEEP_WORKTREE=1
+    echo "Some worker changes could not be auto-applied to ${ORIG_DIR} (local edits conflict)."
+    echo "Their branches/worktrees are kept under ${WT_BASE}/${RUN_ID}-w* — apply manually with git merge/cherry-pick."
+  else
+    _cleanup_workers
+  fi
+  rm -rf "$WORKER_RC_DIR" 2>/dev/null || true
+  [ -n "$WORKER_TMPDIR" ] && rm -rf "$WORKER_TMPDIR" 2>/dev/null || true
+
+  echo ""
+  if [ "$SUCC_COUNT" = "0" ]; then
+    # Every worker failed: same subscription-gated handback as the single path.
+    printf '\xe2\x9d\x8c PARALLEL IMPLEMENT FAILED | %s workers | 0 succeeded\n' "$NWORKERS"
+    echo "No external provider could implement the worker briefs, and no changes were made."
+    echo "NEXT (pick one):"
+    if [ "$MODE" = "subscription" ]; then
+      echo "  1) Continue on the subscription NOW: you (interactive Claude) implement the worker briefs in ${START_DIR} yourself. This is normal interactive use, not a headless subscription run."
+      echo "  2) The user tops up credit or activates a different provider/model in the dashboard, then re-runs: sidewrite"
+    else
+      echo "  1) The user tops up credit or activates a different provider/model in the dashboard, then re-runs: sidewrite"
+    fi
+    echo "Viewer: $VIEWER_URL"
+    exit 0
+  fi
+
+  if [ "$OVERALL" = "success" ]; then
+    printf '\xe2\x9c\x85 PARALLEL COMPLETE | %s/%s workers succeeded | provider=%s model=%s\n' "$SUCC_COUNT" "$NWORKERS" "$PROVIDER" "$MODEL"
+  else
+    printf '\xe2\x9a\xa0\xef\xb8\x8f PARALLEL PARTIAL | %s/%s workers succeeded, %s failed | provider=%s model=%s\n' "$SUCC_COUNT" "$NWORKERS" "$FAIL_COUNT" "$PROVIDER" "$MODEL"
+  fi
+  if [ "$LIVE" = "1" ]; then
+    echo "Changes applied live to your working tree in ${ORIG_DIR} (unstaged — review with: git diff)."
+    echo "Undo this run with:  sidewrite undo ${RUN_ID}"
+  else
+    echo "Changes applied to your working tree in ${ORIG_DIR} (unstaged — review with: git diff)."
+  fi
+  echo "Viewer: $VIEWER_URL"
+  exit 0
+fi
+
+# clean the worktree back to a PLAN-only state between attempts (git repos only)
+_reset_worktree() {
+  if [ "$IS_GIT" = "1" ]; then
+    git reset -q --hard >/dev/null 2>&1 || true
+    git clean -fdq >/dev/null 2>&1 || true
+    if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ ! -f PLAN.md ]; then
+      cp "$PLAN_PATH" PLAN.md 2>/dev/null || true
+    fi
+  fi
+}
+
+# run one implement attempt. Sets RUN_STATUS(success|failed) RUN_REASON RUN_DETAIL RUN_DIFF
+run_implement() {
+  local provider="$1" model="$2"
+  # A free-tier model is KEPT as chosen — it works fine for small/quick tasks.
+  # But free tiers are rate-limited and slow, so a LARGE headless job can trickle
+  # and hit the idle/time cap. Warn only (never override the user's choice); for
+  # big jobs use --fast or a paid model, or split with --workers-file.
+  case "$model" in
+    *:free)
+      echo "sidewrite: note — '$model' is a FREE tier (rate-limited/slow). Great for small tasks; large jobs may time out. Use --fast or a paid model, or --workers-file to split, for big jobs." >&2
+      ;;
+  esac
+  # Fast mode routes for throughput (:nitro); since :free can't be nitro-routed it
+  # also drops :free — an explicit, user-invoked opt-in to the paid tier for speed.
+  if [ "$FAST" = "1" ]; then
+    local _fm; _fm="$(_fast_model "$model")"
+    if [ "$_fm" != "$model" ]; then
+      echo "sidewrite: fast mode — implement model ${model} -> ${_fm}" >&2
+      model="$_fm"
+    fi
+  fi
+  _reset_worktree
+
+  # Extra ccx implement flags (contract 5): always stream partial messages; add
+  # a system-prompt digest when provided ($DIGEST carries essentials+context+
+  # CONTRACT.md in §4.3 order); constrain to the LEAN tool set by DEFAULT
+  # (Area 1.1) unless --full-tools, with --tools re-adding named tools atop it.
+  local -a CCX_EXTRA=( --include-partial-messages )
+  [ -n "$DIGEST" ] && CCX_EXTRA+=( --append-system-prompt "$DIGEST" )
+  if [ "$FULL_TOOLS" != "1" ]; then
+    local _tools="$LEAN_TOOLS"
+    [ -n "$TOOLS_ALLOW" ] && _tools="$LEAN_TOOLS,$TOOLS_ALLOW"
+    CCX_EXTRA+=( --allowedTools "$_tools" )
+  fi
+
+  _api POST /event "$(node -e 'const[r,p,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"pipeline_stage_changed",stage:"implement",status:"started",provider:p,model:m}))' "$RUN_ID" "$provider" "$model")" >/dev/null
+  _api POST /event "$(node -e 'const[r,p,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"provider_activity",stage:"implement",provider:p,model:m,state:"active"}))' "$RUN_ID" "$provider" "$model")" >/dev/null
+
+  local ERRLOG RCFILE HBFILE CCX_STATUS
+  ERRLOG="$(mktemp "${TMPDIR:-/tmp}/sidewrite-err-$$.XXXXXX")"
+  RCFILE="$(mktemp "${TMPDIR:-/tmp}/sidewrite-rc-$$.XXXXXX")"
+  HBFILE="$(mktemp "${TMPDIR:-/tmp}/sidewrite-hb-$$.XXXXXX")"
+  : > "$HBFILE"   # seed the heartbeat so idle is measured from launch
+
+  # Pipe ccx (headless provider) straight into sj-bridge. The pipe streams
+  # stream-json live to the dashboard AND gives the bridge a clean EOF the
+  # moment ccx exits (a backgrounded FIFO writer would leave the write end open
+  # in this shell and hang). sj-bridge bumps $HBFILE on every stream line.
+  #
+  # Watchdog: kills the whole pipeline when EITHER the hard cap (TIMEOUT) is
+  # reached OR no output has flowed for IDLE_TIMEOUT (a stalled/trickling
+  # provider — the common failure with tiny :free models). Liveness = the most
+  # recent of the stream heartbeat OR the provider's own stderr. An empty rc
+  # file then reads as a timeout.
+  set +e
+  (
+    # Export the live-mirror contract into the ( ccx | sj-bridge ) subshell so
+    # the bridge can mirror each applied edit into ORIG_DIR (contract 1/2). ccx
+    # keeps its own env -i scrub; these reach the bridge node, not the provider.
+    export SIDEWRITE_HB_FILE="$HBFILE" \
+           SIDEWRITE_WORKTREE="$WORKTREE" \
+           SIDEWRITE_ORIG_DIR="$ORIG_DIR" \
+           SIDEWRITE_RUN_ID="$RUN_ID" \
+           SIDEWRITE_BACKUP_DIR="$SIDEWRITE_BACKUP_DIR" \
+           SIDEWRITE_LIVE="$LIVE" \
+           SW_PROJECT_ID="$PROJECT_ID" \
+           SW_PROJECT_ROOT="$PROJECT_ROOT" \
+           SW_PROJECT_NAME="$PROJECT_NAME"
+    _swrun_ensure_skills "$provider"
+    _swrun_ensure_context7 "$provider"
+    "$CCX" "$provider" -p "$PROMPT" --model "$model" "${CCX_EXTRA[@]}" "${PASSTHROUGH_FLAGS[@]}" --dangerously-skip-permissions --output-format stream-json --verbose 2> "$ERRLOG" \
+      | node "$SJ_BRIDGE" --run-id "$RUN_ID" --provider "$provider" --model "$model"
+    echo "${PIPESTATUS[0]}" > "$RCFILE"
+  ) &
+  local JOB_PID=$!
+  (
+    # subshell: no `local` needed — vars can't leak to the parent shell
+    start="$(date +%s)"
+    while kill -0 "$JOB_PID" 2>/dev/null; do
+      sleep 5
+      now="$(date +%s)"
+      if [ $((now - start)) -ge "$TIMEOUT" ]; then break; fi
+      hb_hb="$(_mtime "$HBFILE")"; hb_err="$(_mtime "$ERRLOG")"
+      last="$hb_hb"; [ "$hb_err" -gt "$last" ] 2>/dev/null && last="$hb_err"
+      idle=$((now - last))
+      if [ "$idle" -ge "$IDLE_TIMEOUT" ]; then break; fi
+      # Fast-fail on UNRECOVERABLE provider errors (402 no-credit / 401 bad key):
+      # these never recover mid-run, and ccx may keep retrying (keeping stderr
+      # "active"), so kill within ~5s instead of waiting out the idle/hard cap.
+      if grep -qiE 'HTTP 402|insufficient[ _-]?credit|no credit|payment required|quota|HTTP 401|invalid[ _-]?api[ _-]?key|unauthorized|forbidden' "$ERRLOG" 2>/dev/null; then break; fi
+    done
+    kill -TERM "$JOB_PID" 2>/dev/null; pkill -TERM -P "$JOB_PID" 2>/dev/null
+  ) &
+  local WD_PID=$!
+  # Drop the watchdog from the job table so its SIGTERM teardown below prints no
+  # "Terminated: 15" job-control notice into the user's output on a clean run.
+  disown %% 2>/dev/null || true
+  wait "$JOB_PID" 2>/dev/null
+  kill "$WD_PID" 2>/dev/null; pkill -P "$WD_PID" 2>/dev/null
+  set -e
+
+  CCX_STATUS="$(cat "$RCFILE" 2>/dev/null)"
+  [ -z "$CCX_STATUS" ] && CCX_STATUS=143   # killed by the watchdog => timeout
+  rm -f "$RCFILE" "$HBFILE"
+
+  cat "$ERRLOG" >> "$HOME/.sidewrite/RUN_LOG" 2>/dev/null || true
+
+  RUN_DIFF="(no changes)"
+  if [ "$IS_GIT" = "1" ]; then
+    git add -A >/dev/null 2>&1 || true
+    local SS; SS="$(git diff --cached --shortstat 2>/dev/null | sed 's/^ *//')"
+    [ -n "$SS" ] && RUN_DIFF="$SS"
+  fi
+
+  if [ "$CCX_STATUS" -eq 0 ]; then
+    RUN_STATUS="success"; RUN_REASON="ok"; RUN_DETAIL=""
+  else
+    RUN_STATUS="failed"
+    local CLS; CLS="$(node "$CLASSIFY" "$CCX_STATUS" "$ERRLOG" 2>/dev/null || echo 'unknown|')"
+    RUN_REASON="${CLS%%|*}"; RUN_DETAIL="${CLS#*|}"
+  fi
+  rm -f "$ERRLOG"
+}
+
+# Build the failover chain in ONE node pass (replaces the per-provider
+# _first_model shell loop): glob ~/.claude-providers/*.env and emit
+# "provider<TAB>firstmodel" lines — the active PROVIDER first (with its resolved
+# MODEL, falling back to its own first model), then every OTHER provider.
+CHAIN="$(node -e '
+  const fs=require("fs"),path=require("path");
+  const dir=(process.env.HOME||"")+"/.claude-providers";
+  const active=process.argv[1]||"";
+  let activeModel=process.argv[2]||"";
+  const firstModel=(name)=>{
+    try{
+      const raw=fs.readFileSync(path.join(dir,name+".env"),"utf8");
+      for(const line of raw.split(/\r?\n/)){
+        const t=line.trim(); if(!t||t.startsWith("#"))continue;
+        const i=t.indexOf("="); if(i<0)continue;
+        let k=t.slice(0,i).trim(); if(k.startsWith("export "))k=k.slice(7).trim();
+        if(k!=="CCX_MODELS")continue;
+        let v=t.slice(i+1).trim();
+        if(v.length>=2&&v[0]===String.fromCharCode(34)&&v.endsWith(String.fromCharCode(34)))v=v.slice(1,-1);
+        const _a=v.split(",").map(s=>s.trim()).filter(Boolean);return (_a.find(x=>!/:free$/.test(x))||_a[0])||"";
+      }
+    }catch(e){}
+    return "";
+  };
+  const out=[];
+  if(active){ if(!activeModel)activeModel=firstModel(active); out.push(active+"\t"+activeModel); }
+  let files=[];
+  try{files=fs.readdirSync(dir).filter(f=>f.endsWith(".env"));}catch(e){}
+  files.sort();
+  for(const f of files){
+    const nm=f.slice(0,-4);
+    if(nm===active)continue;
+    const mm=firstModel(nm);
+    if(mm)out.push(nm+"\t"+mm);
+  }
+  process.stdout.write(out.join("\n"));
+' "$PROVIDER" "$MODEL" 2>/dev/null || true)"
+
+# Keep MODEL in sync downstream (reporting / handback) when it was omitted.
+if [ -z "$MODEL" ]; then
+  MODEL="$(printf '%s' "$CHAIN" | head -n1 | cut -f2)"
+fi
+
+SUCCESS=0
+TRIED=0
+SUCC_PROV=""; SUCC_MODEL=""
+LAST_PROV="$PROVIDER"; LAST_MODEL="$MODEL"; LAST_REASON="unknown"; LAST_DETAIL=""
+RUN_DIFF="(no changes)"
+FAILOVERS=""
+
+# ---- 8a) cost-budget pre-flight (fail-closed dispatch gate) --------------
+# Consult the already-implemented GET /api/budget/check (viewer-daemon.cjs),
+# which runs evaluateBudget() against the live config's `enforce` flag and
+# this month's known spend, and emits the budget_warn/budget_exceeded SSE the
+# dashboard reacts to. No pre-dispatch cost estimate exists in this pipeline,
+# so estUsd is omitted; per evaluateBudget's own contract an unknown cost only
+# ever WARNS (`state` can still flip to 'warn'/'exceeded' to drive the
+# dashboard toast/ring), it never trips `allow:false` on its own — that
+# requires a KNOWN estUsd (see evaluateBudget's `blocked` expression). So this
+# gate hard-blocks a dispatch only once a caller starts passing a real
+# pre-dispatch cost estimate; until then it makes the enforce/spend state
+# observed and reactive (real SSE events instead of none), matching the
+# scope of this fix. A network hiccup / daemon blip yields an empty response,
+# which is NOT the literal string "false", so this fails OPEN (never blocks
+# a run on an infra glitch) — only an explicit `allow:false` blocks.
+BUDGET_CHECK="$(_api GET "/api/budget/check?run_id=${RUN_ID}")"
+BUDGET_ALLOW="$(printf '%s' "$BUDGET_CHECK" | _json_field allow)"
+if [ "$BUDGET_ALLOW" = "false" ]; then
+  _api POST /event "$(node -e 'const[r]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"budget_blocked",stage:"implement",reason:"budget_exceeded"}))' "$RUN_ID")" >/dev/null
+  echo "sidewrite: run blocked by monthly/per-run cost budget (enforce=true); see Budgets page" >&2
+  echo "Viewer: $VIEWER_URL" >&2
+  exit 1
+fi
+
+# NOTE: the heredoc keeps this loop in the current shell so globals persist.
+while IFS="$(printf '\t')" read -r prov model; do
+  [ -z "$prov" ] && continue
+  TRIED=$((TRIED + 1))
+  LAST_PROV="$prov"; LAST_MODEL="$model"
+
+  # preflight (OpenRouter credit/auth fast-fail; other providers -> skip & run)
+  PF="$(node "$PREFLIGHT" "$prov" 2>/dev/null || echo 'skip|')"
+  PF_REASON="${PF%%|*}"; PF_DETAIL="${PF#*|}"
+  if [ "$PF_REASON" = "no_credit" ] || [ "$PF_REASON" = "auth" ]; then
+    LAST_REASON="$PF_REASON"; LAST_DETAIL="$PF_DETAIL"
+    _api POST /event "$(node -e 'const[r,p,m,rs,d]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"provider_skipped",stage:"implement",provider:p,model:m,reason:rs,detail:d}))' "$RUN_ID" "$prov" "$model" "$PF_REASON" "$PF_DETAIL")" >/dev/null
+    echo "sidewrite: skipping ${prov} (${PF_REASON}: ${PF_DETAIL})" >&2
+    FAILOVERS="${FAILOVERS}${prov}:${PF_REASON} "
+    continue
+  fi
+
+  run_implement "$prov" "$model"
+  if [ "$RUN_STATUS" = "success" ]; then
+    SUCCESS=1; SUCC_PROV="$prov"; SUCC_MODEL="$model"; break
+  fi
+  LAST_REASON="$RUN_REASON"; LAST_DETAIL="$RUN_DETAIL"
+  FAILOVERS="${FAILOVERS}${prov}:${RUN_REASON} "
+  _api POST /event "$(node -e 'const[r,p,m,rs,d]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"provider_failover",stage:"implement",provider:p,model:m,reason:rs,detail:d}))' "$RUN_ID" "$prov" "$model" "$RUN_REASON" "$RUN_DETAIL")" >/dev/null
+  echo "sidewrite: ${prov} failed (${RUN_REASON}: ${RUN_DETAIL}); trying next provider…" >&2
+done <<EOF
+$CHAIN
+EOF
+
+# =========================================================================
+# 9) finish: implement_finished event + .done marker + report / handback
+# =========================================================================
+FINISHED="$(date +%s)"
+if [ "$SUCCESS" -eq 1 ]; then
+  FIN_PROV="$SUCC_PROV"; FIN_MODEL="$SUCC_MODEL"; FIN_STATUS="success"; FIN_REASON="ok"
+else
+  FIN_PROV="$LAST_PROV"; FIN_MODEL="$LAST_MODEL"; FIN_STATUS="implement_failed"; FIN_REASON="$LAST_REASON"
+fi
+
+_api POST /event "$(node -e 'const[r,p,m,b,d,s,rs]=process.argv.slice(1);process.stdout.write(JSON.stringify({run_id:r,type:"implement_finished",stage:"implement",provider:p,model:m,branch:b,diff_stat:d,status:s,reason:rs}))' "$RUN_ID" "$FIN_PROV" "$FIN_MODEL" "$BRANCH" "$RUN_DIFF" "$FIN_STATUS" "$FIN_REASON")" >/dev/null
+
+node -e '
+  const fs = require("fs");
+  const [rid, prov, model, branch, diff, status, reason, started, finished] = process.argv.slice(1);
+  fs.writeFileSync(process.env.HOME + "/.sidewrite/runs/" + rid + ".done", JSON.stringify({
+    run_id: rid, provider: prov, model, branch, diff_stat: diff, status, reason,
+    started_at: Number(started), finished_at: Number(finished)
+  }, null, 2), { mode: 0o600 });
+' "$RUN_ID" "$FIN_PROV" "$FIN_MODEL" "$BRANCH" "$RUN_DIFF" "$FIN_STATUS" "$FIN_REASON" "$NOW" "$FINISHED"
+
+if [ "$SUCCESS" -eq 1 ]; then
+  NOTE=""
+  [ "$FIN_PROV" != "$PROVIDER" ] && NOTE=" (failed over from ${PROVIDER})"
+
+  printf '\xe2\x9c\x85 TASK COMPLETE | provider=%s model=%s | diff=%s | status=success%s\n' \
+    "$FIN_PROV" "$FIN_MODEL" "$RUN_DIFF" "$NOTE"
+
+  if [ "$LIVE" = "1" ]; then
+    # Live mirror: each edit was copied into ORIG_DIR the instant it landed in
+    # the worktree (sj-bridge, contract 2). The changes are ALREADY in the user's
+    # working tree — do NOT re-apply the diff. The worktree is cleaned by the EXIT
+    # trap. A per-file backup + manifest lets `sidewrite undo` revert precisely.
+    echo "Changes applied live to your working tree in ${ORIG_DIR} (unstaged — review with: git diff)."
+    echo "Undo this run with:  sidewrite undo ${RUN_ID}"
+  else
+    # LIVE==0: the model worked in an isolated worktree; now apply its diff back
+    # into ORIG_DIR as UNSTAGED edits so the changes appear in the current files —
+    # not a sibling folder. Leave unstaged for review; never auto-commit. If the
+    # patch can't apply cleanly (conflicting local edits), keep the worktree and
+    # tell the user where it is rather than losing the work.
+    APPLIED=0
+    if [ -n "${WORKTREE:-}" ] && [ "$IS_GIT" = "1" ]; then
+      PATCH="$(mktemp "${TMPDIR:-/tmp}/sidewrite-patch-$$.XXXXXX")"
+      git -C "$WORKTREE" add -A >/dev/null 2>&1 || true
+      # Diff the index against the ORIGINAL base — a real commit, or git's empty
+      # tree for an unborn repo (so all files appear as additions) — then apply
+      # into ORIG_DIR. (|| true so `set -e` can't kill the run before reporting.)
+      git -C "$WORKTREE" diff --cached --binary "$BASE_SHA" > "$PATCH" 2>/dev/null || true
+      if [ -s "$PATCH" ] && { git -C "$ORIG_DIR" apply --3way --whitespace=nowarn "$PATCH" >/dev/null 2>&1 || \
+           git -C "$ORIG_DIR" apply --whitespace=nowarn "$PATCH" >/dev/null 2>&1; }; then
+        APPLIED=1
+      fi
+      rm -f "$PATCH"
+      # LAST-RESORT fallback: if git-apply produced/applied nothing (orphan worktree
+      # on an unborn repo, binary-only edge cases…), copy the worktree's changed
+      # files straight into ORIG_DIR so the work is NEVER silently lost.
+      if [ "$APPLIED" != "1" ]; then
+        _changed="$(git -C "$WORKTREE" diff --cached --name-only "$BASE_SHA" 2>/dev/null || true)"
+        if [ -z "$_changed" ]; then
+          APPLIED=2   # genuinely no changes — a legitimate no-op
+        else
+          _n=0
+          while IFS= read -r _rel; do
+            [ -z "$_rel" ] && continue
+            if [ -f "$WORKTREE/$_rel" ]; then
+              mkdir -p "$ORIG_DIR/$(dirname "$_rel")" 2>/dev/null || true
+              cp -f "$WORKTREE/$_rel" "$ORIG_DIR/$_rel" 2>/dev/null && _n=$((_n + 1))
+            fi
+          done <<EOF2
+$_changed
+EOF2
+          [ "$_n" -gt 0 ] && APPLIED=1
+        fi
+      fi
+    else
+      APPLIED=1   # in-place run (no worktree): changes are already in ORIG_DIR
+    fi
+
+    if [ "$APPLIED" = "1" ] || [ "$APPLIED" = "2" ]; then
+      echo "Changes applied to your working tree in ${ORIG_DIR} (unstaged — review with: git diff)."
+    else
+      KEEP_WORKTREE=1
+      echo "Could not auto-apply the changes to ${ORIG_DIR} (local edits conflict)."
+      echo "The changes are ready on branch ${BRANCH} in: ${WORKTREE}"
+      echo "Apply them with:  git -C \"${ORIG_DIR}\" merge --no-ff ${BRANCH}   (or cherry-pick / manual diff)"
+    fi
+  fi
+  echo "Viewer: $VIEWER_URL"
+  exit 0
+fi
+
+# ---- every provider failed: hand the task back to interactive Claude ----
+# Clean up the empty worktree (no changes were produced). The EXIT trap also
+# covers this, but do it now so the message below reflects a clean tree.
+_cleanup_worktree; WORKTREE=""
+
+printf '\xe2\x9d\x8c IMPLEMENT FAILED | tried=%s provider(s) | last: provider=%s model=%s reason=%s | detail=%s\n' \
+  "$TRIED" "$LAST_PROV" "$LAST_MODEL" "$LAST_REASON" "$LAST_DETAIL"
+[ -n "$FAILOVERS" ] && echo "Attempts: ${FAILOVERS}"
+if [ -n "$BRIEF" ]; then SOURCE_DESC="the brief"; else SOURCE_DESC="PLAN.md"; fi
+echo "No external provider could implement ${SOURCE_DESC}, and no changes were made."
+echo "NEXT (pick one):"
+# The subscription handback is legal ONLY in subscription mode: there the human
+# has a subscription and can implement interactively. In standalone/unknown mode
+# there is no subscription to continue on, so suppress that option entirely.
+if [ "$MODE" = "subscription" ]; then
+  echo "  1) Continue on the subscription NOW: you (interactive Claude) implement ${SOURCE_DESC} in ${START_DIR} and make the changes yourself. This is the recommended fallback — it is normal interactive use, not a headless subscription run."
+  echo "  2) The user tops up credit or activates a different provider/model in the dashboard, then re-runs: sidewrite"
+else
+  echo "  1) The user tops up credit or activates a different provider/model in the dashboard, then re-runs: sidewrite"
+fi
+echo "Viewer: $VIEWER_URL"
+# Exit 0 so the handback text reaches interactive Claude as a normal tool result.
+exit 0

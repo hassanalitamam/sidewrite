@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+npm-debug.log*
+CLAUDE.md
+# sidewrite runtime data lives in ~/.sidewrite and ~/.claude-providers (never in-repo)
+sidewrite-docs/

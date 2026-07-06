@@ -1,0 +1,63 @@
+{
+  "name": "sidewrite",
+  "version": "0.2.0",
+  "description": "Delegate the implement step to any anthropic-compatible provider (GLM/DeepSeek/…) running headless on its own API key, while planning and reviewing stay on your interactive Claude subscription. Ships a local SSE dashboard and installs as a global Claude Code plugin. No external deps (node:sqlite, node:http).",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-code-plugin",
+    "plugin",
+    "dashboard",
+    "sse",
+    "multi-provider",
+    "headless",
+    "glm",
+    "deepseek",
+    "cost-tracking",
+    "cli"
+  ],
+  "license": "Apache-2.0",
+  "author": "Hassan Ali <hsnnet963@gmail.com>",
+  "homepage": "https://github.com/hassanalitamam/sidewrite#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hassanalitamam/sidewrite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hassanalitamam/sidewrite/issues"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "sidewrite": "bin/sidewrite",
+    "sw": "bin/sidewrite",
+    "side": "bin/sidewrite",
+    "ccx": "bin/ccx"
+  },
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs"
+  },
+  "files": [
+    "bin/",
+    "plugin/",
+    "index.cjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "preferGlobal": true,
+  "scripts": {
+    "postinstall": "node plugin/scripts/bootstrap.cjs preflight || exit 0",
+    "start": "node --experimental-sqlite plugin/scripts/viewer-daemon.cjs",
+    "build:models": "node plugin/scripts/build-model-snapshot.cjs",
+    "install-plugin": "node plugin/scripts/cli.cjs install",
+    "open": "node plugin/scripts/cli.cjs open",
+    "up": "node plugin/scripts/cli.cjs up",
+    "stop": "node plugin/scripts/cli.cjs stop",
+    "status": "node plugin/scripts/cli.cjs status",
+    "doctor": "node plugin/scripts/cli.cjs doctor"
+  }
+}

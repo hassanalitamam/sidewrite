@@ -1,0 +1,2001 @@
+{
+  "version": 3,
+  "note": "Hand-maintained catalog of the best 10 free-tier-eligible providers for the Free-Tier Pool track. This is metadata only — no keys live here. `wire` selects which pool-adapters.cjs adapter handles the family; `baseUrl` is an editable prefill for the add-key form (same 'catalog fills it in, user can override' pattern as the existing Providers catalog tab); `tosRisk` surfaces each provider's own terms-of-service posture for personal/single-user proxy use (informational, not legal advice — see plugin/scripts/pool-router.cjs header). `typicalLimits` is a short human-readable summary. `models` is an EXHAUSTIVE researched (2026-07-05) per-model breakdown — every free-tier text-generation/chat-completion model each provider offers (audio/TTS, embeddings, image-gen, and moderation-only models excluded as unusable for a Claude Code chat backend), not a trimmed sample — context window in tokens, and whichever of RPM/RPD/TPM/TPD the provider actually publishes for its free tier (null, not guessed, for anything unconfirmed) — cross-checked between github.com/cheahjs/free-llm-api-resources and each provider's own official docs, official docs preferred on conflict. Shown in the add-key form (prefills Base URL, model datalist, and the advanced context/limit fields) and in the 'browse all models' reference table; never auto-applied without the user seeing it first. DeepSeek and OVH were dropped from the prior 12-provider list: DeepSeek's own API turned out to have no free tier at all (pay-per-token only, confirmed via official docs), and OVH's 2 RPM/no-context-data offering was the weakest of the set — Cloudflare Workers AI was promoted in to keep a genuine top 10. Cohere is deliberately absent: its terms explicitly forbid personal/household use.",
+  "providers": [
+    {
+      "id": "zai-glm",
+      "name": "Z.ai (Zhipu) GLM",
+      "wire": "anthropic",
+      "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "tosRisk": "ok",
+      "docsUrl": "https://docs.z.ai/guides/overview/pricing",
+      "typicalLimits": "2 fully free models (GLM-4.7-Flash/4.5-Flash) — RPM/RPD not published (account-gated)",
+      "models": [
+        {
+          "id": "glm-4.7-flash",
+          "name": "GLM-4.7-Flash",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "glm-4.5-flash",
+          "name": "GLM-4.5-Flash",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "wire": "openai",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "tosRisk": "ok",
+      "docsUrl": "https://console.groq.com/docs/rate-limits",
+      "typicalLimits": "12 free models — ~30 RPM (60 for Qwen3 32B), RPD 100–14,400, TPM 1.2K–70K",
+      "models": [
+        {
+          "id": "llama-3.1-8b-instant",
+          "name": "Llama 3.1 8B Instant",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 14400,
+          "tpm": 6000,
+          "tpd": 500000
+        },
+        {
+          "id": "llama-3.3-70b-versatile",
+          "name": "Llama 3.3 70B Versatile",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 1000,
+          "tpm": 12000,
+          "tpd": 100000
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "name": "GPT-OSS 120B",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 1000,
+          "tpm": 8000,
+          "tpd": 200000
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "name": "GPT-OSS 20B",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 1000,
+          "tpm": 8000,
+          "tpd": 200000
+        },
+        {
+          "id": "groq/compound",
+          "name": "Groq Compound",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 250,
+          "tpm": 70000,
+          "tpd": null
+        },
+        {
+          "id": "groq/compound-mini",
+          "name": "Groq Compound Mini",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 250,
+          "tpm": 70000,
+          "tpd": null
+        },
+        {
+          "id": "canopylabs/orpheus-arabic-saudi",
+          "name": "Orpheus Arabic (Saudi)",
+          "context": 4000,
+          "rpm": 10,
+          "rpd": 100,
+          "tpm": 1200,
+          "tpd": 3600
+        },
+        {
+          "id": "canopylabs/orpheus-v1-english",
+          "name": "Orpheus v1 English",
+          "context": 4000,
+          "rpm": 10,
+          "rpd": 100,
+          "tpm": 1200,
+          "tpd": 3600
+        },
+        {
+          "id": "meta-llama/llama-4-scout-17b-16e-instruct",
+          "name": "Llama 4 Scout 17B Instruct",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 1000,
+          "tpm": 30000,
+          "tpd": 500000
+        },
+        {
+          "id": "qwen/qwen3-32b",
+          "name": "Qwen 3 32B",
+          "context": 131072,
+          "rpm": 60,
+          "rpd": 1000,
+          "tpm": 6000,
+          "tpd": 500000
+        },
+        {
+          "id": "qwen/qwen3.6-27b",
+          "name": "Qwen 3.6 27B",
+          "context": 131072,
+          "rpm": 30,
+          "rpd": 1000,
+          "tpm": 8000,
+          "tpd": 200000
+        },
+        {
+          "id": "allam-2-7b",
+          "name": "Allam 2 7B",
+          "context": null,
+          "rpm": 30,
+          "rpd": 7000,
+          "tpm": 6000,
+          "tpd": 500000
+        }
+      ]
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "wire": "openai",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "tosRisk": "ok",
+      "docsUrl": "https://inference-docs.cerebras.ai/support/rate-limits",
+      "typicalLimits": "3 free models — 5 RPM · 30K TPM · 1M TPD, uniform across all",
+      "models": [
+        {
+          "id": "gpt-oss-120b",
+          "name": "OpenAI GPT OSS",
+          "context": 131072,
+          "rpm": 5,
+          "rpd": null,
+          "tpm": 30000,
+          "tpd": 1000000
+        },
+        {
+          "id": "gemma-4-31b",
+          "name": "Gemma 4 31B",
+          "context": 131072,
+          "rpm": 5,
+          "rpd": null,
+          "tpm": 30000,
+          "tpd": 1000000
+        },
+        {
+          "id": "zai-glm-4.7",
+          "name": "Z.ai GLM 4.7",
+          "context": 131072,
+          "rpm": 5,
+          "rpd": null,
+          "tpm": 30000,
+          "tpd": 1000000
+        }
+      ]
+    },
+    {
+      "id": "github-models",
+      "name": "GitHub Models",
+      "wire": "openai",
+      "baseUrl": "https://models.github.ai/inference",
+      "tosRisk": "caution",
+      "tosNote": "Free tier explicitly scoped to experimentation/prototyping. Also caps every request at 8,000 input / 4,000 output tokens regardless of the model's real context window — not a TPM/TPD limit, a per-request cap.",
+      "docsUrl": "https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models#rate-limits",
+      "typicalLimits": "35 free models (Copilot Free) — low tier 15 RPM/150 RPD, high tier 10 RPM/50 RPD, reasoning models 1–2 RPM/8–12 RPD",
+      "models": [
+        {
+          "id": "openai/gpt-4.1",
+          "name": "OpenAI GPT-4.1",
+          "context": 1048576,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-4.1-mini",
+          "name": "OpenAI GPT-4.1-mini",
+          "context": 1048576,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-4.1-nano",
+          "name": "OpenAI GPT-4.1-nano",
+          "context": 1048576,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-4o",
+          "name": "OpenAI GPT-4o",
+          "context": 131072,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-4o-mini",
+          "name": "OpenAI GPT-4o mini",
+          "context": 131072,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-5",
+          "name": "OpenAI gpt-5",
+          "context": 200000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-5-chat",
+          "name": "OpenAI gpt-5-chat (preview)",
+          "context": 200000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-5-mini",
+          "name": "OpenAI gpt-5-mini",
+          "context": 200000,
+          "rpm": 2,
+          "rpd": 12,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-5-nano",
+          "name": "OpenAI gpt-5-nano",
+          "context": 200000,
+          "rpm": 2,
+          "rpd": 12,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o1",
+          "name": "OpenAI o1",
+          "context": 200000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o1-mini",
+          "name": "OpenAI o1-mini",
+          "context": 128000,
+          "rpm": 2,
+          "rpd": 12,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o1-preview",
+          "name": "OpenAI o1-preview",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o3",
+          "name": "OpenAI o3",
+          "context": 200000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o3-mini",
+          "name": "OpenAI o3-mini",
+          "context": 200000,
+          "rpm": 2,
+          "rpd": 12,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/o4-mini",
+          "name": "OpenAI o4-mini",
+          "context": 200000,
+          "rpm": 2,
+          "rpd": 12,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "cohere/cohere-command-a",
+          "name": "Cohere Command A",
+          "context": 131072,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "deepseek/deepseek-r1",
+          "name": "DeepSeek-R1",
+          "context": 128000,
+          "rpm": 1,
+          "rpd": 8,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "deepseek/deepseek-r1-0528",
+          "name": "DeepSeek-R1-0528",
+          "context": 128000,
+          "rpm": 1,
+          "rpd": 8,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "deepseek/deepseek-v3-0324",
+          "name": "DeepSeek-V3-0324",
+          "context": 128000,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.2-11b-vision-instruct",
+          "name": "Llama-3.2-11B-Vision-Instruct",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.2-90b-vision-instruct",
+          "name": "Llama-3.2-90B-Vision-Instruct",
+          "context": 128000,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.3-70b-instruct",
+          "name": "Llama-3.3-70B-Instruct",
+          "context": 128000,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-4-maverick-17b-128e-instruct-fp8",
+          "name": "Llama 4 Maverick 17B 128E Instruct FP8",
+          "context": 1000000,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-4-scout-17b-16e-instruct",
+          "name": "Llama 4 Scout 17B 16E Instruct",
+          "context": 10000000,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/meta-llama-3.1-405b-instruct",
+          "name": "Meta-Llama-3.1-405B-Instruct",
+          "context": 131072,
+          "rpm": 10,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/meta-llama-3.1-8b-instruct",
+          "name": "Meta-Llama-3.1-8B-Instruct",
+          "context": 131072,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistral-ai/codestral-2501",
+          "name": "Codestral 25.01",
+          "context": 256000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistral-ai/ministral-3b",
+          "name": "Ministral 3B",
+          "context": 131072,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistral-ai/mistral-medium-2505",
+          "name": "Mistral Medium 3 (25.05)",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistral-ai/mistral-small-2503",
+          "name": "Mistral Small 3.1",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4",
+          "name": "Phi-4",
+          "context": 16384,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-mini-instruct",
+          "name": "Phi-4-mini-instruct",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-mini-reasoning",
+          "name": "Phi-4-mini-reasoning",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-multimodal-instruct",
+          "name": "Phi-4-multimodal-instruct",
+          "context": 128000,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-reasoning",
+          "name": "Phi-4-reasoning",
+          "context": 32768,
+          "rpm": 15,
+          "rpd": 150,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "openrouter-free",
+      "name": "OpenRouter (free models)",
+      "wire": "openai",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "tosRisk": "ok",
+      "docsUrl": "https://openrouter.ai/docs/api/reference/limits",
+      "typicalLimits": "19 free models — 20 RPM · 50 RPD shared account-wide (1,000 RPD after $10+ lifetime topup)",
+      "models": [
+        {
+          "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+          "name": "Venice: Uncensored (free)",
+          "context": 32768,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "cohere/north-mini-code:free",
+          "name": "Cohere: North Mini Code (free)",
+          "context": 256000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "liquid/lfm-2.5-1.2b-instruct:free",
+          "name": "LiquidAI: LFM2.5-1.2B-Instruct (free)",
+          "context": 32768,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "liquid/lfm-2.5-1.2b-thinking:free",
+          "name": "LiquidAI: LFM2.5-1.2B-Thinking (free)",
+          "context": 32768,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta-llama/llama-3.2-3b-instruct:free",
+          "name": "Meta: Llama 3.2 3B Instruct (free)",
+          "context": 131072,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "name": "Meta: Llama 3.3 70B Instruct (free)",
+          "context": 131072,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+          "name": "Nous: Hermes 3 405B Instruct (free)",
+          "context": 131072,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+          "name": "NVIDIA: Nemotron 3 Nano 30B A3B (free)",
+          "context": 256000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b:free",
+          "name": "NVIDIA: Nemotron 3 Super (free)",
+          "context": 1000000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "name": "NVIDIA: Nemotron 3 Ultra (free)",
+          "context": 1000000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3.5-content-safety:free",
+          "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+          "context": 128000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-nano-9b-v2:free",
+          "name": "NVIDIA: Nemotron Nano 9B V2 (free)",
+          "context": 128000,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-oss-120b:free",
+          "name": "OpenAI: gpt-oss-120b (free)",
+          "context": 131072,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-oss-20b:free",
+          "name": "OpenAI: gpt-oss-20b (free)",
+          "context": 131072,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "poolside/laguna-m.1:free",
+          "name": "Poolside: Laguna M.1 (free)",
+          "context": 262144,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "poolside/laguna-xs-2.1:free",
+          "name": "Poolside: Laguna XS 2.1 (free)",
+          "context": 262144,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "poolside/laguna-xs.2:free",
+          "name": "Poolside: Laguna XS.2 (free)",
+          "context": 262144,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3-coder:free",
+          "name": "Qwen: Qwen3 Coder 480B A35B (free)",
+          "context": 1048576,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+          "name": "Qwen: Qwen3 Next 80B A3B Instruct (free)",
+          "context": 262144,
+          "rpm": 20,
+          "rpd": 50,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "sambanova",
+      "name": "SambaNova",
+      "wire": "openai",
+      "baseUrl": "https://api.sambanova.ai/v1",
+      "tosRisk": "ok",
+      "docsUrl": "https://docs.sambanova.ai",
+      "typicalLimits": "6 free models via $5/3-month trial credit — no fixed RPM/RPD published",
+      "models": [
+        {
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax M2.7",
+          "context": 192000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "DeepSeek-V3.1",
+          "name": "DeepSeek V3.1",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "Meta-Llama-3.3-70B-Instruct",
+          "name": "Meta Llama 3.3 70B Instruct",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "gpt-oss-120b",
+          "name": "OpenAI GPT-OSS 120B",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "DeepSeek-V3.2",
+          "name": "DeepSeek V3.2",
+          "context": 32000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "gemma-4-31B-it",
+          "name": "Google Gemma 4 31B IT",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "cloudflare-ai",
+      "name": "Cloudflare Workers AI",
+      "wire": "openai",
+      "baseUrl": "",
+      "tosRisk": "caution",
+      "tosNote": "No anti-proxy clause found; covered by the general Self-Serve Subscription Agreement. Base URL includes your account id — fill in after Base URL. Limit is a shared 'neurons' compute budget, not a request or token count, so it doesn't map onto RPM/RPD/TPM/TPD — treat the numbers below as unavailable, not zero.",
+      "docsUrl": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+      "typicalLimits": "42 free models sharing a 10,000 Neurons/day budget (resets 00:00 UTC) — no per-request RPM/RPD",
+      "models": [
+        {
+          "id": "@cf/kimi-k2.7-code",
+          "name": "Kimi K2.7 Code",
+          "context": 262100,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/glm-4.7-flash",
+          "name": "GLM-4.7-Flash",
+          "context": 131072,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gpt-oss-120b",
+          "name": "GPT-OSS-120B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-4-scout-17b-16e-instruct",
+          "name": "Llama 4 Scout Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/glm-5.2",
+          "name": "GLM-5.2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/kimi-k2.6",
+          "name": "Kimi K2.6",
+          "context": 262100,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-4-26b-a4b-it",
+          "name": "Gemma 4 26B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/nemotron-3-120b-a12b",
+          "name": "Nemotron-3 120B Super",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/kimi-k2.5",
+          "name": "Kimi K2.5",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/granite-4.0-h-micro",
+          "name": "Granite 4.0 Micro",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-sea-lion-v4-27b-it",
+          "name": "SEA-LION 27B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/qwen3-30b-a3b-fp8",
+          "name": "Qwen3 30B FP8",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-3-12b-it",
+          "name": "Gemma 3 12B Instruct",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/mistral-small-3.1-24b-instruct",
+          "name": "Mistral Small 3.1 24B Instruct",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/qwq-32b",
+          "name": "QwQ 32B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/qwen2.5-coder-32b-instruct",
+          "name": "Qwen2.5-Coder 32B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-guard-3-8b",
+          "name": "Llama Guard 3 8B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/deepseek-r1-distill-qwen-32b",
+          "name": "DeepSeek R1 Distill Qwen 32B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.3-70b-instruct-fp8-fast",
+          "name": "Llama 3.3 70B Instruct FP8 Fast",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.2-1b-instruct",
+          "name": "Llama 3.2 1B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.2-3b-instruct",
+          "name": "Llama 3.2 3B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.2-11b-vision-instruct",
+          "name": "Llama 3.2 11B Vision Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.1-8b-instruct-awq",
+          "name": "Llama 3.1 8B Instruct AWQ",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.1-8b-instruct-fp8",
+          "name": "Llama 3.1 8B Instruct FP8",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.1-8b-instruct",
+          "name": "Llama 3.1 8B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/meta-llama-3-8b-instruct",
+          "name": "Meta Llama 3 8B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3-8b-instruct-awq",
+          "name": "Llama 3 8B Instruct AWQ",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3-8b-instruct",
+          "name": "Llama 3 8B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/mistral-7b-instruct-v0.2",
+          "name": "Mistral 7B Instruct v0.2",
+          "context": 32000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-7b-it-lora",
+          "name": "Gemma 7B Instruct LoRA",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-2b-it-lora",
+          "name": "Gemma 2B Instruct LoRA",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-2-7b-chat-hf-lora",
+          "name": "Llama 2 7B Chat LoRA",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/gemma-7b-it",
+          "name": "Gemma 7B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/hermes-2-pro-mistral-7b",
+          "name": "Hermes 2 Pro Mistral 7B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/mistral-7b-instruct-v0.2-lora",
+          "name": "Mistral 7B Instruct v0.2 LoRA",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/phi-2",
+          "name": "Phi-2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/sqlcoder-7b-2",
+          "name": "SQLCoder 7B-2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-2-7b-chat-fp16",
+          "name": "Llama 2 7B Chat FP16",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/mistral-7b-instruct-v0.1",
+          "name": "Mistral 7B Instruct v0.1",
+          "context": 8000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-2-7b-chat-int8",
+          "name": "Llama 2 7B Chat INT8",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.1-70b-instruct",
+          "name": "Llama 3.1 70B Instruct",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "@cf/llama-3.1-8b-instruct-fast",
+          "name": "Llama 3.1 8B Instruct Fast",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "nvidia-nim",
+      "name": "NVIDIA NIM",
+      "wire": "openai",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "tosRisk": "caution",
+      "tosNote": "Trial ToS scopes free access to evaluation only, not production. Requires phone-number verification.",
+      "docsUrl": "https://build.nvidia.com",
+      "typicalLimits": "48 free models — ~40 RPM shared across all, no published RPD/TPM/TPD",
+      "models": [
+        {
+          "id": "meta/llama2-70b",
+          "name": "Llama 2 70B",
+          "context": 4096,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.1-8b-instruct",
+          "name": "Llama 3.1 8B Instruct",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.1-70b-instruct",
+          "name": "Llama 3.1 70B Instruct",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.2-1b-instruct",
+          "name": "Llama 3.2 1B Instruct",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.2-3b-instruct",
+          "name": "Llama 3.2 3B Instruct",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "meta/llama-3.3-70b-instruct",
+          "name": "Llama 3.3 70B Instruct",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "google/gemma-7b",
+          "name": "Gemma 7B",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "google/gemma-2-2b-it",
+          "name": "Gemma 2 2B IT",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "google/codegemma-7b",
+          "name": "CodeGemma 7B",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistralai/mixtral-8x7b-instruct",
+          "name": "Mixtral 8x7B Instruct",
+          "context": 32000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistralai/mixtral-8x22b-instruct",
+          "name": "Mixtral 8x22B Instruct",
+          "context": 65536,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistralai/mistral-nemotron",
+          "name": "Mistral Nemotron",
+          "context": 4096,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-mini-instruct",
+          "name": "Phi-4 Mini Instruct",
+          "context": 16384,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "microsoft/phi-4-mini-flash-reasoning",
+          "name": "Phi-4 Mini Flash Reasoning",
+          "context": 16384,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
+          "name": "Llama 3.1 Nemotron Nano 8B v1",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+          "name": "Llama 3.1 Nemotron Ultra 253B v1",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
+          "name": "Llama 3.3 Nemotron Super 49B v1",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "name": "Llama 3.3 Nemotron Super 49B v1.5",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-30b-a3b",
+          "name": "Nemotron 3 Nano 30B",
+          "context": 1000000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "Nemotron 3 Super 120B",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "name": "Nemotron 3 Ultra 550B",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nemotron-mini-4b-instruct",
+          "name": "Nemotron Mini 4B Instruct",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/nvidia-nemotron-nano-9b-v2",
+          "name": "NVIDIA Nemotron Nano 9B v2",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/riva-translate-4b-instruct-v1_1",
+          "name": "Riva Translate 4B Instruct",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "nvidia/usdcode",
+          "name": "USD Code",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen2.5-coder-32b-instruct",
+          "name": "Qwen 2.5 Coder 32B Instruct",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-instruct",
+          "name": "Qwen 3 Next 80B A3B Instruct",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-thinking",
+          "name": "Qwen 3 Next 80B A3B Thinking",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3-coder-480b-a35b-instruct",
+          "name": "Qwen 3 Coder 480B A35B Instruct",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwq-32b",
+          "name": "QwQ 32B",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "qwen/qwen3.5-122b-a10b",
+          "name": "Qwen 3.5 122B A10B",
+          "context": 32768,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "deepseek-ai/deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "context": 32000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "deepseek-ai/deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "context": 32000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "moonshotai/kimi-k2-instruct",
+          "name": "Kimi K2 Instruct",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "moonshotai/kimi-k2-thinking",
+          "name": "Kimi K2 Thinking",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "bytedance/seed-oss-36b-instruct",
+          "name": "Seed OSS 36B Instruct",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "minimaxai/minimax-m2.5",
+          "name": "MiniMax M2.5",
+          "context": 200000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "minimaxai/minimax-m2.7",
+          "name": "MiniMax M2.7",
+          "context": 200000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "upstage/solar-10.7b-instruct",
+          "name": "Solar 10.7B Instruct",
+          "context": 4096,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "name": "GPT OSS 20B",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "name": "GPT OSS 120B",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "z-ai/glm4.7",
+          "name": "GLM 4.7",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "z-ai/glm5.1",
+          "name": "GLM 5.1",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "z-ai/glm-5.2",
+          "name": "GLM 5.2",
+          "context": 8192,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "abacusai/dracarys-llama-3.1-70b-instruct",
+          "name": "Dracarys Llama 3.1 70B Instruct",
+          "context": 128000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "sarvamai/sarvam-m",
+          "name": "Sarvam M",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "stepfun-ai/step-3-5-flash",
+          "name": "Step 3.5 Flash",
+          "context": 200000,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "stockmark/stockmark-2-100b-instruct",
+          "name": "StockMark 2 100B Instruct",
+          "context": null,
+          "rpm": 40,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "wire": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "tosRisk": "caution",
+      "tosNote": "March 2026 ToS narrows free-tier scope to professional/business use; also geo-blocked in EU/UK/CH. Google's own docs no longer publish a static rate-limit table — these numbers come from the community aggregator only and may drift; check aistudio.google.com/rate-limit for your account's actual figures.",
+      "docsUrl": "https://ai.google.dev/gemini-api/docs/rate-limits",
+      "typicalLimits": "7 free models — Flash family 5–15 RPM · 20–500 RPD · 250K TPM · up to 1M context",
+      "models": [
+        {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash",
+          "context": 1000000,
+          "rpm": 5,
+          "rpd": 20,
+          "tpm": 250000,
+          "tpd": null
+        },
+        {
+          "id": "gemini-3.1-flash-lite",
+          "name": "Gemini 3.1 Flash-Lite",
+          "context": 1000000,
+          "rpm": 15,
+          "rpd": 500,
+          "tpm": 250000,
+          "tpd": null
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro (Preview)",
+          "context": 1000000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "gemini-3-flash-preview",
+          "name": "Gemini 3 Flash (Preview)",
+          "context": 1000000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "context": 1000000,
+          "rpm": 5,
+          "rpd": 20,
+          "tpm": 250000,
+          "tpd": null
+        },
+        {
+          "id": "gemini-2.5-flash-lite",
+          "name": "Gemini 2.5 Flash-Lite",
+          "context": 1000000,
+          "rpm": 10,
+          "rpd": null,
+          "tpm": 250000,
+          "tpd": null
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "context": 1000000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        }
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral AI",
+      "wire": "openai",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "tosRisk": "ok",
+      "docsUrl": "https://docs.mistral.ai/admin/user-management-finops/tier",
+      "typicalLimits": "35 free models via the \"Experiment\" plan (~1 req/sec, 500K TPM) plus Codestral (30 RPM · 2,000 RPD)",
+      "models": [
+        {
+          "id": "mistral-medium-3-5-26-04",
+          "name": "Mistral Medium 3.5",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2603",
+          "name": "Mistral Small 4",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-large-2512",
+          "name": "Mistral Large 3",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "ministral-14b-2512",
+          "name": "Ministral 3 14B",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "ministral-8b-2512",
+          "name": "Ministral 3 8B",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "ministral-3b-2512",
+          "name": "Ministral 3 3B",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2506",
+          "name": "Mistral Small 3.2",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-medium-2508",
+          "name": "Mistral Medium 3.1",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "codestral-2508",
+          "name": "Codestral",
+          "context": 128000,
+          "rpm": 30,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "devstral-2512",
+          "name": "Devstral 2",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "labs-leanstral-1-5",
+          "name": "Leanstral 1.5",
+          "context": 256000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "labs-mistral-small-creative",
+          "name": "Mistral Small Creative",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "devstral-small-2512",
+          "name": "Devstral Small 2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "magistral-medium-2507",
+          "name": "Magistral Medium 1.2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "magistral-small-2507",
+          "name": "Magistral Small 1.2",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-large-2411",
+          "name": "Mistral Large 2.1",
+          "context": 128000,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "open-mistral-nemo-2407",
+          "name": "Open Mistral Nemo",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "open-mixtral-8x22b",
+          "name": "Open Mixtral 8x22B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "open-mixtral-8x7b",
+          "name": "Open Mixtral 8x7B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-medium-2312",
+          "name": "Mistral Medium (2312)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2402",
+          "name": "Mistral Small (2402)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-large-2402",
+          "name": "Mistral Large (2402)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "open-mistral-7b",
+          "name": "Open Mistral 7B",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2501",
+          "name": "Mistral Small (2501)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "devstral-small-2505",
+          "name": "Devstral Small (2505)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "devstral-medium-2507",
+          "name": "Devstral Medium (2507)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-medium-2505",
+          "name": "Mistral Medium (2505)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2503",
+          "name": "Mistral Small (2503)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-small-2409",
+          "name": "Mistral Small (2409)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-large-2407",
+          "name": "Mistral Large (2407)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "codestral-2405",
+          "name": "Codestral (2405)",
+          "context": null,
+          "rpm": 30,
+          "rpd": null,
+          "tpm": null,
+          "tpd": null
+        },
+        {
+          "id": "mistral-large-2309",
+          "name": "Mistral Large (2309)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "mistral-medium-2311",
+          "name": "Mistral Medium (2311)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "ministral-3b-2410",
+          "name": "Ministral 3B (2410)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        },
+        {
+          "id": "ministral-8b-2410",
+          "name": "Ministral 8B (2410)",
+          "context": null,
+          "rpm": null,
+          "rpd": null,
+          "tpm": 500000,
+          "tpd": null
+        }
+      ]
+    }
+  ]
+}

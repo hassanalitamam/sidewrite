@@ -1,0 +1,31 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sidewrite-marketplace",
+  "version": "0.2.0",
+  "description": "Marketplace hosting the sidewrite plugin.",
+  "owner": {
+    "name": "Sidewrite",
+    "url": "https://github.com/hassanalitamam/sidewrite"
+  },
+  "plugins": [
+    {
+      "name": "sidewrite",
+      "source": "./",
+      "version": "0.2.0",
+      "description": "Delegate implement to any anthropic-compatible provider headless on its own API key; plan/review stay on your Claude subscription. Live SSE dashboard with provider management and cost tracking.",
+      "author": {
+        "name": "Sidewrite"
+      },
+      "homepage": "https://github.com/hassanalitamam/sidewrite",
+      "license": "Apache-2.0",
+      "category": "workflow",
+      "tags": [
+        "dashboard",
+        "multi-provider",
+        "headless",
+        "sse",
+        "cost-tracking"
+      ]
+    }
+  ]
+}

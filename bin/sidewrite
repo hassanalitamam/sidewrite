@@ -1,0 +1,551 @@
+#!/usr/bin/env bash
+#
+# sidewrite — top-level CLI dispatcher.
+#
+#   Management verbs (delegated to plugin/scripts/cli.cjs):
+#     install    register sidewrite as a global Claude Code plugin + link CLIs + open dashboard
+#     uninstall  reverse install (keeps ~/.sidewrite data)
+#     open       start the daemon if needed, then open the dashboard in a browser
+#     up|start   ensure the viewer daemon is running
+#     stop       stop the viewer daemon
+#     status     print the daemon status snapshot
+#     url        print the dashboard URL
+#     doctor     environment diagnostics
+#     setup      guided first-run setup
+#     undo       revert files a run wrote back into the working dir
+#
+#   Pipeline (delegated to bin/sidewrite-run):
+#     run [provider] [--model M] [--prompt TEXT | --prompt-file PATH] [--title SLUG] ["task…"]
+#       A Claude-authored brief (--prompt / --prompt-file / stdin) drives the
+#       run without a PLAN.md; precedence is brief > PLAN.md > gate.
+#
+#   Backwards compatible: `sidewrite <provider> "task"` and `sidewrite "task"`
+#   fall through to `run`.
+#
+set -eo pipefail
+
+# ---- locate ourselves (resolve symlinks so PATH/npm-global installs work) --
+SELF="${BASH_SOURCE[0]}"
+while [ -h "$SELF" ]; do
+  dir="$(cd -P "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+BIN_DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+ROOT_DIR="$(cd -P "$BIN_DIR/.." && pwd)"
+CLI="$ROOT_DIR/plugin/scripts/cli.cjs"
+RUN="$BIN_DIR/sidewrite-run"
+
+cmd="${1:-}"
+
+# ---- feature #1: check for updates (non-blocking, notify-only) ----
+# Spawn a background job to check for updates asynchronously.
+# Never blocks the CLI; user gets a notification if an update is available.
+_sw_check_update() {
+  node -e '
+    const { checkForUpdate } = require("'"$ROOT_DIR"'/plugin/scripts/updater.cjs");
+    (async () => {
+      try {
+        const result = await checkForUpdate();
+        if (result.updateAvailable && result.current && result.latest) {
+          process.stderr.write(
+            "\n" +
+            "  [1;36m▸[0m  Update available: [1m" + result.current + "[0m → [1m" + result.latest + "[0m\n" +
+            "  [2m  Run [1mnpm i -g sidewrite@latest[2m to install.[0m\n\n"
+          );
+        }
+      } catch (_) {
+        /* silently ignore errors */
+      }
+    })();
+  ' 2>/dev/null &
+}
+
+# ---- force-update gate: remote-config minVersion / killSwitch ----
+# Always-on (no opt-in, same privacy footprint as the version check above —
+# just "what version am I", nothing else). Blocking by design: a version-floor
+# or kill-switch that only ran in the background could be silently skipped by
+# exactly the users it exists to reach. Fails open on any network/parse error
+# (remote-config.cjs itself never throws and returns cached-or-defaults).
+#
+# Exit codes handled by the caller: 2 = killSwitch active (block), 3 = a
+# required update was silently applied (tell the user to re-run). Anything
+# else (including a caught error) means "continue" — this gate must never
+# brick a run over its own failure.
+_sw_force_update_gate() {
+  node -e '
+    const rc = require("'"$ROOT_DIR"'/plugin/scripts/remote-config.cjs");
+    const updater = require("'"$ROOT_DIR"'/plugin/scripts/updater.cjs");
+    const { semverGt } = require("'"$ROOT_DIR"'/plugin/scripts/semver.cjs");
+    (async () => {
+      try {
+        const cfg = await rc.fetchConfig({ enabled: true });
+
+        const ESC = "";
+
+        if (cfg.killSwitch === true) {
+          process.stderr.write(
+            "\n" +
+            "  " + ESC + "[1;31m✖" + ESC + "[0m  " + ESC + "[1mThis version of sidewrite has been disabled." + ESC + "[0m\n" +
+            "  " + ESC + "[2m  Run " + ESC + "[1mnpm i -g sidewrite@latest" + ESC + "[2m to restore access." + ESC + "[0m\n\n"
+          );
+          process.exit(2);
+        }
+
+        if (cfg.minVersion) {
+          const current = updater._readCurrentVersion();
+          if (current && semverGt(cfg.minVersion, current)) {
+            process.stderr.write(
+              "\n" +
+              "  " + ESC + "[1;33m▸" + ESC + "[0m  " + ESC + "[1mA required update (" + cfg.minVersion + ") is being installed…" + ESC + "[0m\n"
+            );
+            const result = await updater.applyUpdate({ apply: true });
+            if (result && result.applied) {
+              process.stderr.write(
+                "  " + ESC + "[1;32m✔" + ESC + "[0m  Updated to " + ESC + "[1m" + result.version + ESC + "[0m. Please re-run your command.\n\n"
+              );
+              process.exit(3);
+            }
+            process.stderr.write(
+              "  " + ESC + "[1;31m✖" + ESC + "[0m  Automatic update failed (" + ((result && (result.error || result.reason)) || "unknown") + ").\n" +
+              "  " + ESC + "[2m  Run " + ESC + "[1mnpm i -g sidewrite@latest" + ESC + "[2m manually. Continuing on the current version for now." + ESC + "[0m\n\n"
+            );
+          }
+        }
+
+        process.exit(0);
+      } catch (_) {
+        process.exit(0); // fail open: this gate must never block a run over its own error
+      }
+    })();
+  '
+  return $?
+}
+
+# ---- feature #7: onboarding entry — first-run setup ----
+# On first run (needsOnboarding() → true), launch the interactive wizard.
+_sw_maybe_onboard() {
+  # Onboarding is an interactive wizard; NEVER attempt it on a headless pipeline
+  # (e.g. /sidewrite-delegate piping a brief on stdin with no TTY). Without this
+  # gate a fresh/corrupt config fail-closes to needsOnboarding()=true and the
+  # provider loop spins forever on immediately-resolving empty stdin reads.
+  [ -t 0 ] && [ -t 1 ] || return 0
+
+  needs_onboard="$(node -e '
+    const { needsOnboarding } = require("'"$ROOT_DIR"'/plugin/scripts/onboarding.cjs");
+    process.stdout.write(needsOnboarding() ? "true" : "false");
+  ' 2>/dev/null || true)"
+
+  if [ "$needs_onboard" = "true" ]; then
+    node -e '
+      const { runOnboarding } = require("'"$ROOT_DIR"'/plugin/scripts/onboarding.cjs");
+      runOnboarding().catch(() => {
+        process.exit(0); /* non-fatal */
+      });
+    ' 2>/dev/null || true
+    return 0
+  fi
+}
+
+# Run the force-update gate for every real-usage path (run/code/bare/pipeline).
+# Skipped for management/introspection commands so `status`/`doctor`/`open`/etc.
+# always work even when a forced update can't apply (e.g. offline, no npm).
+case "$cmd" in
+  install|uninstall|open|up|start|stop|status|url|doctor|setup|undo|mode|help|-h|--help) ;;
+  *)
+    _sw_force_update_gate
+    gate_rc=$?
+    [ "$gate_rc" = "2" ] && exit 1
+    [ "$gate_rc" = "3" ] && exit 0
+    ;;
+esac
+
+case "$cmd" in
+  install|uninstall|open|up|start|stop|status|url|doctor|setup|undo|mode)
+    exec node "$CLI" "$@"
+    ;;
+  run)
+    # First-run: check if onboarding is needed.
+    _sw_maybe_onboard
+    shift
+    exec "$RUN" "$@"
+    ;;
+  code|c|co)
+    # Launch an INTERACTIVE Claude Code session on an external provider (no -p).
+    # Standalone mode: no subscription — Claude Code itself runs on the provider
+    # via ccx's base-URL swap, isolated under CLAUDE_CONFIG_DIR=~/.claude-<prov>.
+    shift
+    # Disambiguate a leading provider NAME from a passthrough FLAG so that
+    # `sidewrite code --resume` (provider from config) and `sidewrite code myprov -c`
+    # both work: only consume $1 as the provider when it is not an option. Anything
+    # left in "$@" is forwarded to `claude` (via ccx) at exec — e.g. --resume / -c /
+    # --continue / --resume <id>.
+    provider=""
+    case "${1:-}" in
+      -*|"") ;;                    # a flag (or nothing) -> resolve provider from config
+      *) provider="$1"; shift ;;   # a bare provider name -> consume it
+    esac
+    if [ -z "$provider" ]; then
+      # else the standalone session provider (config.json .session.provider),
+      # else the active provider (active.json .provider).
+      provider="$(node -e '
+        const fs = require("fs");
+        const H = process.env.HOME;
+        const read = (p, path) => {
+          try {
+            const o = JSON.parse(fs.readFileSync(p, "utf8"));
+            let v = o;
+            for (const k of path) { v = (v == null ? null : v[k]); }
+            return v == null ? "" : String(v);
+          } catch (e) { return ""; }
+        };
+        let v = read(H + "/.sidewrite/config.json", ["session", "provider"]);
+        if (!v) v = read(H + "/.sidewrite/active.json", ["provider"]);
+        process.stdout.write(v);
+      ' 2>/dev/null || true)"
+    fi
+    # Read the model-alias map (config.json .session.aliases). ccx reads
+    # CCX_ALIAS_* after sourcing the provider .env (an .env value still wins) and
+    # forwards them as ANTHROPIC_DEFAULT_*_MODEL.
+    _sw_alias() {
+      node -e '
+        const fs = require("fs");
+        try {
+          const c = JSON.parse(fs.readFileSync(process.env.HOME + "/.sidewrite/config.json", "utf8"));
+          const a = (c.session && c.session.aliases) || {};
+          const v = a[process.argv[1]];
+          process.stdout.write(v ? String(v) : "");
+        } catch (e) { /* no aliases */ }
+      ' "$1" 2>/dev/null || true
+    }
+    AL_SONNET="$(_sw_alias sonnet)"
+    AL_OPUS="$(_sw_alias opus)"
+    AL_HAIKU="$(_sw_alias haiku)"
+    PRIMARY_MODEL="$AL_SONNET"
+    [ -z "$PRIMARY_MODEL" ] && PRIMARY_MODEL="$AL_OPUS"
+    [ -z "$PRIMARY_MODEL" ] && PRIMARY_MODEL="$AL_HAIKU"
+    # No explicit alias map? fall back to the provider's first registered model
+    # (CCX_MODELS) so a single model works with no mapping at all.
+    if [ -z "$PRIMARY_MODEL" ] && [ -n "$provider" ]; then
+      PRIMARY_MODEL="$(node -e '
+        const fs = require("fs");
+        try {
+          const t = fs.readFileSync(process.env.HOME + "/.claude-providers/" + process.argv[1] + ".env", "utf8");
+          const m = t.match(/^\s*(?:export\s+)?CCX_MODELS\s*=\s*"?([^"\n]*)"?/m);
+          const first = m ? m[1].split(",").map(s => s.trim()).filter(Boolean)[0] : "";
+          process.stdout.write(first || "");
+        } catch (e) { /* none */ }
+      ' "$provider" 2>/dev/null || true)"
+    fi
+
+    # You must add a provider AND at least one model before a session can start.
+    if [ -z "$provider" ] || [ -z "$PRIMARY_MODEL" ]; then
+      printf '\n'
+      printf '  \033[1;33m●\033[0m  \033[1mAdd a model before starting a session\033[0m\n'
+      printf '\033[2m     Standalone mode runs Claude Code on your own provider, so it needs a\n'
+      printf '     provider and a model mapped onto Claude'\''s aliases (sonnet/opus/haiku).\033[0m\n\n'
+      [ -n "$provider" ] && printf '     Provider: \033[1m%s\033[0m  \033[2m(no model mapped yet)\033[0m\n\n' "$provider"
+      printf '     \033[1m1.\033[0m Add a provider (OpenRouter, or your own endpoint).\n'
+      printf '     \033[1m2.\033[0m Map its models onto \033[1msonnet / opus / haiku\033[0m.\n'
+      printf '     \033[1m3.\033[0m Then run  \033[1;36msidewrite code\033[0m  again.\n\n'
+      printf '\033[2m     Opening the dashboard so you can add one…\033[0m\n\n'
+      exec node "$CLI" open
+    fi
+
+    # A single model backs ALL three aliases unless the dashboard mapped more.
+    AL_SONNET="${AL_SONNET:-$PRIMARY_MODEL}"
+    AL_OPUS="${AL_OPUS:-$PRIMARY_MODEL}"
+    AL_HAIKU="${AL_HAIKU:-$PRIMARY_MODEL}"
+
+    # `claude --resume` only ever lists sessions under the CURRENT
+    # CLAUDE_CONFIG_DIR's own projects/<encoded-cwd> tree. Since ccx isolates
+    # every standalone run under its own ~/.claude-<provider> (account safety
+    # — see bin/ccx: never share auth/credentials across providers or with
+    # the subscription), each provider you've ever used from this directory —
+    # including plain `claude` (subscription, ~/.claude) — has historically
+    # kept a completely separate, invisible-to-the-others session store. So
+    # switching models mid-project (e.g. mimo -> together -> freetier) meant
+    # `--resume` under the new one could never see, let alone continue, a
+    # conversation another model had been carrying.
+    #
+    # Fix: right before launching, mirror every OTHER known session store's
+    # history for this exact directory into the one we're about to use —
+    # read-only, symlinks only, one directory (projects/<encoded-cwd>) at a
+    # time. This never touches credentials/auth/settings — only ever adds
+    # symlinks to *.jsonl transcript files inside our own already-isolated
+    # ~/.claude-<provider> tree, and ~/.claude itself is never written to.
+    # Run every time `sidewrite code` launches, for whichever provider is
+    # about to run, so the model you just switched to always sees (and can
+    # continue) whatever every other model already did here.
+    _sw_link_session_history() {
+      local prov="$1" encoded my_dir other_dir dir f base
+      encoded="$(pwd | sed 's/[\/.]/-/g')"
+      my_dir="$HOME/.claude-$prov/projects/$encoded"
+      mkdir -p "$my_dir"
+      for dir in "$HOME/.claude" "$HOME"/.claude-*; do
+        [ "$dir" = "$HOME/.claude-$prov" ] && continue
+        other_dir="$dir/projects/$encoded"
+        [ -d "$other_dir" ] || continue
+        for f in "$other_dir"/*.jsonl; do
+          [ -e "$f" ] || continue
+          base="$(basename "$f")"
+          [ -e "$my_dir/$base" ] || ln -s "$f" "$my_dir/$base" 2>/dev/null
+        done
+      done
+    }
+    _sw_link_session_history "$provider"
+
+    # Claude Code's native WebSearch is an Anthropic-hosted server tool — it
+    # silently does nothing under ccx's base-URL swap, since a third-party
+    # provider has no way to execute it. Every provider's config dir gets a
+    # real, working replacement wired in the first time it's used: an MCP
+    # server (plugin/scripts/websearch-mcp.cjs, DuckDuckGo-backed, no API key)
+    # exposed as an ordinary function tool — which works identically no
+    # matter which model backend is running, since MCP tools are invoked
+    # client-side by Claude Code itself. The broken native tool is denied so
+    # the model only ever sees the one that actually works.
+    #
+    # MCP servers are NOT read from settings.json's `mcpServers` key (that
+    # key is silently ignored — verified live: `claude mcp list` reported
+    # "No MCP servers configured" even with it present). The real store is
+    # `.claude.json` (user/local scope), which `CLAUDE_CONFIG_DIR` DOES
+    # redirect — so this must go through the real `claude mcp add` command,
+    # not a hand-edited JSON file, to land in the location Claude Code
+    # actually reads.
+    _sw_ensure_websearch() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir"
+      # Idempotent: skip if already registered for this provider.
+      if CLAUDE_CONFIG_DIR="$cfgdir" claude mcp get websearch >/dev/null 2>&1; then
+        return 0
+      fi
+      CLAUDE_CONFIG_DIR="$cfgdir" claude mcp add --scope user websearch \
+        -- node "$ROOT_DIR/plugin/scripts/websearch-mcp.cjs" >/dev/null 2>&1 || true
+      # permissions.deny IS a real settings.json key (unlike mcpServers) —
+      # this part was already correct.
+      node -e '
+        const fs = require("fs");
+        const path = process.argv[1] + "/settings.json";
+        let cfg = {};
+        try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch (_) {}
+        cfg.permissions = cfg.permissions || {};
+        const deny = cfg.permissions.deny || [];
+        if (!deny.includes("WebSearch")) deny.push("WebSearch");
+        cfg.permissions.deny = deny;
+        fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+      ' "$cfgdir" 2>/dev/null || true
+    }
+    _sw_ensure_websearch "$provider"
+
+    # Claude Code's native WebFetch is, like WebSearch above, an
+    # Anthropic-hosted server tool — it silently does nothing (or errors)
+    # under ccx's base-URL swap, since a third-party provider has no way to
+    # execute it. Every provider's config dir gets a real, working
+    # replacement wired in the first time it's used: an MCP server
+    # (plugin/scripts/webfetch-mcp.cjs, no API key) exposed as an ordinary
+    # function tool — which works identically no matter which model backend
+    # is running, since MCP tools are invoked client-side by Claude Code
+    # itself. The broken native tool is denied so the model only ever sees
+    # the one that actually works.
+    #
+    # MCP servers are NOT read from settings.json's `mcpServers` key (that
+    # key is silently ignored — verified live: `claude mcp list` reported
+    # "No MCP servers configured" even with it present). The real store is
+    # `.claude.json` (user/local scope), which `CLAUDE_CONFIG_DIR` DOES
+    # redirect — so this must go through the real `claude mcp add` command,
+    # not a hand-edited JSON file, to land in the location Claude Code
+    # actually reads.
+    _sw_ensure_webfetch() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir"
+      # Idempotent: skip if already registered for this provider.
+      if CLAUDE_CONFIG_DIR="$cfgdir" claude mcp get webfetch >/dev/null 2>&1; then
+        return 0
+      fi
+      CLAUDE_CONFIG_DIR="$cfgdir" claude mcp add --scope user webfetch \
+        -- node "$ROOT_DIR/plugin/scripts/webfetch-mcp.cjs" >/dev/null 2>&1 || true
+      # permissions.deny IS a real settings.json key (unlike mcpServers) —
+      # this part was already correct.
+      node -e '
+        const fs = require("fs");
+        const path = process.argv[1] + "/settings.json";
+        let cfg = {};
+        try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch (_) {}
+        cfg.permissions = cfg.permissions || {};
+        const deny = cfg.permissions.deny || [];
+        if (!deny.includes("WebFetch")) deny.push("WebFetch");
+        cfg.permissions.deny = deny;
+        fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+      ' "$cfgdir" 2>/dev/null || true
+    }
+    _sw_ensure_webfetch "$provider"
+
+    # An "essential" skill (dashboard Skills page, POST /api/skills/essential)
+    # is fanned out into every station that EXISTS at the moment it's marked —
+    # but a station for a provider you add/launch LATER never got backfilled,
+    # so the skill looked "linked to one model" instead of following every
+    # provider. Close that gap here: every `sidewrite code` launch re-checks
+    # ~/.sidewrite/essential-skills.json and copies in whatever's still
+    # missing from THIS provider's own skills/ dir — idempotent (skips a skill
+    # already present), fail-soft per skill (a vanished source dir is skipped,
+    # never aborts the launch).
+    _sw_ensure_essential_skills() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir/skills"
+      node -e '
+        const fs = require("fs");
+        const path = require("path");
+        const H = process.env.HOME;
+        const destSkills = process.argv[1];
+        let data;
+        try { data = JSON.parse(fs.readFileSync(H + "/.sidewrite/essential-skills.json", "utf8")); }
+        catch (e) { process.exit(0); }
+        const skills = Array.isArray(data.skills) ? data.skills : [];
+        for (const s of skills) {
+          if (!s || typeof s.name !== "string" || !s.path) continue;
+          const dest = path.join(destSkills, s.name);
+          if (fs.existsSync(path.join(dest, "SKILL.md"))) continue;
+          const srcDir = path.dirname(s.path);
+          if (!fs.existsSync(path.join(srcDir, "SKILL.md"))) continue;
+          try { fs.cpSync(srcDir, dest, { recursive: true }); } catch (e) { /* fail-soft per skill */ }
+        }
+      ' "$cfgdir/skills" 2>/dev/null || true
+    }
+    _sw_ensure_essential_skills "$provider"
+
+    # Personal essential/global-enabled skills are backfilled above; do the same
+    # for PLUGIN skill enablement — a plugin marked "enabled everywhere" via the
+    # dashboard writes enabledPlugins[plugin]=true into every station that
+    # EXISTED at toggle time (viewer-daemon.cjs's setPluginSkillGlobal). A
+    # provider added/launched later never saw that flip, so replay it here by
+    # unioning enabledPlugins from whichever other station(s) already exist —
+    # fail-soft, additive only (never overrides an explicit local value).
+    _sw_ensure_plugin_skills() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir"
+      node -e '
+        const fs = require("fs");
+        const path = require("path");
+        const H = process.env.HOME;
+        const cfgdir = process.argv[1];
+        let entries = [];
+        try { entries = fs.readdirSync(H, { withFileTypes: true }); } catch (e) { process.exit(0); }
+        const union = {};
+        for (const e of entries) {
+          if (!e.isDirectory() || !e.name.startsWith(".claude-") || e.name === ".claude-providers") continue;
+          const other = path.join(H, e.name);
+          if (path.resolve(other) === path.resolve(cfgdir)) continue;
+          let settings;
+          try { settings = JSON.parse(fs.readFileSync(path.join(other, "settings.json"), "utf8")); } catch (e) { continue; }
+          const ep = settings && settings.enabledPlugins;
+          if (Array.isArray(ep)) { for (const n of ep) if (typeof n === "string") union[n] = true; }
+          else if (ep && typeof ep === "object") { for (const k of Object.keys(ep)) if (ep[k]) union[k] = true; }
+        }
+        if (!Object.keys(union).length) process.exit(0);
+        const settingsPath = path.join(cfgdir, "settings.json");
+        let cur = {};
+        try { cur = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch (e) {}
+        const curEp = (cur.enabledPlugins && typeof cur.enabledPlugins === "object" && !Array.isArray(cur.enabledPlugins)) ? cur.enabledPlugins : {};
+        let changed = false;
+        for (const k of Object.keys(union)) {
+          if (curEp[k] === undefined) { curEp[k] = true; changed = true; }
+        }
+        if (!changed) process.exit(0);
+        cur.enabledPlugins = curEp;
+        const tmp = settingsPath + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2), { mode: 0o600 });
+        try { fs.chmodSync(tmp, 0o600); } catch (e) {}
+        fs.renameSync(tmp, settingsPath);
+      ' "$cfgdir" 2>/dev/null || true
+    }
+    _sw_ensure_plugin_skills "$provider"
+
+    # Context7 MCP (https://context7.com): fetches version-pinned, up-to-date
+    # library/framework docs on demand, so a weaker/older-cutoff provider model
+    # isn't stuck writing code from stale training data. Registered exactly like
+    # websearch/webfetch above — settings.json's mcpServers key is dead, so this
+    # goes through the real `claude mcp add` CLI, not a hand-edited JSON file.
+    # Idempotent (skips if already registered); skips cleanly if the user hasn't
+    # configured a Context7 key on the dashboard yet.
+    _sw_ensure_context7() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir"
+      if CLAUDE_CONFIG_DIR="$cfgdir" claude mcp get context7 >/dev/null 2>&1; then
+        return 0
+      fi
+      local key
+      key="$(node -e '
+        try {
+          const store = require(process.argv[1]);
+          const r = store.readContext7Key();
+          if (r.apiKey) process.stdout.write(r.apiKey);
+        } catch (e) { /* no key configured yet, or store unreadable */ }
+      ' "$ROOT_DIR/plugin/scripts/context7-store.cjs" 2>/dev/null)"
+      [ -z "$key" ] && return 0
+      CLAUDE_CONFIG_DIR="$cfgdir" claude mcp add --transport http --scope user context7 \
+        https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY: $key" >/dev/null 2>&1 || true
+    }
+    _sw_ensure_context7 "$provider"
+
+    # Custom sub-agents (dashboard "Sub-agents" panel): each is materialized as
+    # a real agents/<name>.md (native Claude Code convention). Creating/editing
+    # one fans it into every station that EXISTS at that moment (viewer-daemon.cjs's
+    # fanAgentMarkdown) — same backfill gap as essential skills/plugins above, so
+    # replay it here for stations added/launched later. Additive + idempotent:
+    # only (re)writes a file when its content actually differs, so a local edit
+    # made directly in a station's agents/ dir before this ran isn't stomped
+    # unless the dashboard's own record changed.
+    _sw_ensure_agents() {
+      local prov="$1" cfgdir="$HOME/.claude-$1"
+      mkdir -p "$cfgdir/agents"
+      node -e '
+        const fs = require("fs");
+        const path = require("path");
+        const H = process.env.HOME;
+        const destDir = process.argv[1];
+        let store;
+        try { store = require(process.argv[2]); } catch (e) { process.exit(0); }
+        let agents;
+        try { agents = store.listAgents(); } catch (e) { process.exit(0); }
+        for (const rec of agents) {
+          if (!rec || !store.nameSafe(rec.name)) continue;
+          const dest = path.join(destDir, rec.name + ".md");
+          const md = store.renderAgentMarkdown(rec);
+          let existing = null;
+          try { existing = fs.readFileSync(dest, "utf8"); } catch (e) {}
+          if (existing === md) continue;
+          try { fs.writeFileSync(dest, md, { mode: 0o600 }); } catch (e) { /* fail-soft per agent */ }
+        }
+      ' "$cfgdir/agents" "$ROOT_DIR/plugin/scripts/agent-store.cjs" 2>/dev/null || true
+    }
+    _sw_ensure_agents "$provider"
+
+    # Show the model(s) that will back the session, then launch. opus/haiku are
+    # only listed when they differ from sonnet (i.e. a real multi-model map).
+    printf '\033[1;36m▸ sidewrite code\033[0m  provider=\033[1m%s\033[0m  \033[2msonnet=\033[0m\033[1m%s\033[0m' "$provider" "$AL_SONNET"
+    [ "$AL_OPUS" != "$AL_SONNET" ]  && printf '  \033[2mopus=\033[0m\033[1m%s\033[0m' "$AL_OPUS"
+    [ "$AL_HAIKU" != "$AL_SONNET" ] && printf '  \033[2mhaiku=\033[0m\033[1m%s\033[0m' "$AL_HAIKU"
+    printf '\n\033[2m  starting an interactive Claude Code session on this provider…\033[0m\n'
+    export CCX_ALIAS_SONNET="$AL_SONNET"
+    export CCX_ALIAS_OPUS="$AL_OPUS"
+    export CCX_ALIAS_HAIKU="$AL_HAIKU"
+    exec "$BIN_DIR/ccx" "$provider" "$@"
+    ;;
+  "")
+    # Bare `sidewrite` opens the dashboard — the control center.
+    # First-run: check if onboarding is needed; if so, run it before opening dashboard.
+    _sw_maybe_onboard
+    # Spawn update-check in background (non-blocking).
+    _sw_check_update
+    exec node "$CLI" open
+    ;;
+  help|-h|--help)
+    exec node "$CLI" --help
+    ;;
+  *)
+    # Anything else is a pipeline invocation: sidewrite <provider> "task…"
+    # First-run: check if onboarding is needed.
+    _sw_maybe_onboard
+    exec "$RUN" "$@"
+    ;;
+esac

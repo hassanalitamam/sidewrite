@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# ccx — run `claude` against an anthropic-compatible provider from
+#       ~/.claude-providers/<provider>.env, with a SCRUBBED environment.
+#
+# Usage: ccx <provider> [claude args...]
+#
+# The provider .env supplies (shell KEY="VALUE" lines):
+#   CCX_BASE_URL="https://..."   (MUST NOT be api.anthropic.com)
+#   CCX_TOKEN="sk-..."           (provider api key; comes from file, never argv)
+#   CCX_MODELS="modelA,modelB"
+#   CCX_PRICES='{"modelA":{"in":0.5,"out":1.5}}'
+#
+set -eo pipefail
+
+provider="${1:-}"
+if [ -z "$provider" ]; then
+  echo "Usage: ccx <provider> [claude args...]" >&2
+  exit 1
+fi
+shift
+
+envfile="$HOME/.claude-providers/${provider}.env"
+if [ ! -f "$envfile" ]; then
+  echo "ccx: provider registry file not found: $envfile" >&2
+  echo "ccx: add the provider from the dashboard or create the .env (0600)." >&2
+  exit 1
+fi
+
+# Source the provider registry file. env -i below scrubs everything anyway,
+# so exporting here has no effect on the final child environment.
+# shellcheck disable=SC1090
+. "$envfile"
+
+# ---- SAFETY CHECKS (abort if violated) ----------------------------------
+if [ -z "${CCX_BASE_URL:-}" ]; then
+  echo "ccx: SAFETY: CCX_BASE_URL is not set in $envfile — aborting." >&2
+  exit 1
+fi
+case "$CCX_BASE_URL" in
+  *api.anthropic.com*)
+    echo "ccx: SAFETY: CCX_BASE_URL points at api.anthropic.com — aborting." >&2
+    echo "ccx: this wrapper is only for third-party anthropic-compatible providers." >&2
+    exit 1
+    ;;
+esac
+if [ -z "${CCX_TOKEN:-}" ]; then
+  echo "ccx: SAFETY: CCX_TOKEN is not set in $envfile — aborting." >&2
+  exit 1
+fi
+
+# Optional model-alias overrides: if the provider .env maps Claude's aliases
+# onto provider model ids (CCX_ALIAS_SONNET/OPUS/HAIKU), export the matching
+# ANTHROPIC_DEFAULT_*_MODEL so Claude Code uses the provider's models. Only
+# non-empty aliases are passed into the scrubbed env -i child.
+EXTRA_ENV=()
+[ -n "${CCX_ALIAS_SONNET:-}" ] && EXTRA_ENV+=("ANTHROPIC_DEFAULT_SONNET_MODEL=$CCX_ALIAS_SONNET")
+[ -n "${CCX_ALIAS_OPUS:-}" ]   && EXTRA_ENV+=("ANTHROPIC_DEFAULT_OPUS_MODEL=$CCX_ALIAS_OPUS")
+[ -n "${CCX_ALIAS_HAIKU:-}" ]  && EXTRA_ENV+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$CCX_ALIAS_HAIKU")
+
+# First run auto-creates ~/.claude-<provider> via CLAUDE_CONFIG_DIR.
+# env -i drops ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / OAuth cache /
+# any inherited ANTHROPIC_* so the provider token is the ONLY credential.
+exec env -i \
+  PATH="$PATH" \
+  HOME="$HOME" \
+  TERM="${TERM:-xterm-256color}" \
+  CLAUDE_CONFIG_DIR="$HOME/.claude-$provider" \
+  NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-$HOME/.sidewrite/ccache}" \
+  ANTHROPIC_BASE_URL="$CCX_BASE_URL" \
+  ANTHROPIC_AUTH_TOKEN="$CCX_TOKEN" \
+  "${EXTRA_ENV[@]}" \
+  claude "$@"

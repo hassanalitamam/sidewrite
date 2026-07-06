@@ -1,0 +1,133 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #f6f5f2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: #e05a26;
+  color: #f6f5f2;
+}
+
+@keyframes sw-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes sw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes sw-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Hover states — inline styles can't express :hover, so the base color
+   lives inline and the hover accent lives here via className. */
+.sw-navlink {
+  transition: color 0.15s ease;
+}
+.sw-navlink:hover {
+  color: #e05a26 !important;
+}
+
+.sw-cta {
+  transition: background 0.15s ease;
+}
+.sw-cta:hover {
+  background: #ff8557 !important;
+}
+
+.sw-copy {
+  transition: background 0.15s ease;
+}
+.sw-copy:hover {
+  background: rgba(224, 90, 38, 0.12) !important;
+}
+
+.sw-muted-link {
+  transition: color 0.15s ease;
+}
+.sw-muted-link:hover {
+  color: #16181c !important;
+}
+
+.sw-footer-link {
+  transition: color 0.15s ease;
+}
+.sw-footer-link:hover {
+  color: #e05a26 !important;
+}
+
+/* Docs sidebar links — base color is inline; hover darkens inactive links. */
+.sw-doc-link {
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.sw-doc-link:hover {
+  color: #16181c !important;
+}
+
+/* Docs overview cards + prev/next pager */
+.sw-doc-card {
+  transition: border-color 0.15s ease;
+}
+.sw-doc-card:hover {
+  border-color: #e05a26 !important;
+}
+.sw-pager-link {
+  transition: border-color 0.15s ease;
+}
+.sw-pager-link:hover {
+  border-color: #e05a26 !important;
+}
+.sw-pager-link:hover .sw-pager-title {
+  color: #e05a26 !important;
+}
+
+/* Changelog "full history" ghost button */
+.sw-ghost-btn {
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.sw-ghost-btn:hover {
+  border-color: #e05a26 !important;
+  color: #e05a26 !important;
+}
+
+/* FAQ accordion */
+details.sw-faq > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details.sw-faq > summary::-webkit-details-marker {
+  display: none;
+}
+details.sw-faq > summary .sw-plus::after {
+  content: "+";
+}
+details.sw-faq[open] > summary .sw-plus::after {
+  content: "\2212"; /* − */
+}

@@ -1,0 +1,404 @@
+<title>Sidewrite — delegation control room</title>
+<link rel="stylesheet" href="/viewer.css">
+
+<!--
+  Sidewrite viewer — SHELL ONLY. All logic lives in /js/*.js (ES modules).
+  Design = v2 prototype (warm cream + terracotta, sharp radius:0, inline-SVG icons).
+  Behaviour/data = real daemon endpoints + SSE (see js/).
+  Security: the bearer token is injected into THIS shell only (GET /); the daemon
+  replaces the __SIDEWRITE_* placeholders. Static .css/.js stay token-free.
+-->
+
+<!-- The daemon does a GLOBAL string-replace of the placeholders. We build the
+     window property NAME by concatenation so ONLY the quoted value placeholder
+     is substituted — the property key survives intact and js/config.js reads it. -->
+<script>
+  window["__SIDEWRITE_" + "TOKEN__"] = "__SIDEWRITE_TOKEN__";
+  window["__SIDEWRITE_" + "PORT__"]  = "__SIDEWRITE_PORT__";
+</script>
+
+<!-- ============ ICON SPRITE (inline, CSP-safe; crisp 1.5px stroke, currentColor) ============ -->
+<svg width="0" height="0" style="position:absolute;width:0;height:0" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="ic-runs" viewBox="0 0 24 24"><path d="M3 12h3.5l2.5 7 4-14 2.5 7H21"/></symbol>
+    <symbol id="ic-skills" viewBox="0 0 24 24"><path d="M12 3l2.5 5.2 5.5.8-4 3.9 1 5.6L12 15.9 6.9 18.5l1-5.6-4-3.9 5.5-.8z"/></symbol>
+    <symbol id="ic-providers" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="6"/><rect x="3.5" y="13.5" width="17" height="6"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+    <symbol id="ic-running" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/></symbol>
+    <symbol id="ic-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5 11-11"/></symbol>
+    <symbol id="ic-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="ic-cost" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M16.5 7.2C15.6 6 14 5.4 12 5.4c-2.4 0-4.2 1.1-4.2 3s1.7 2.8 4.2 3.2 4.2 1.2 4.2 3.2-1.8 3-4.2 3c-2 0-3.6-.6-4.5-1.8"/></symbol>
+    <symbol id="ic-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></symbol>
+    <symbol id="ic-worker" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/></symbol>
+    <symbol id="ic-refresh" viewBox="0 0 24 24"><path d="M4 11a8 8 0 0 1 13.7-4.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 13a8 8 0 0 1-13.7 4.7L4 16"/><path d="M4 20v-4h4"/></symbol>
+    <symbol id="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8l1.8-1.8M18 6l1.8-1.8"/></symbol>
+    <symbol id="ic-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+    <symbol id="ic-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11"/><path d="M15.5 8.5V5.5a1 1 0 0 0-1-1h-9a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3"/></symbol>
+    <symbol id="ic-back" viewBox="0 0 24 24"><path d="M20 12H5"/><path d="M11 6l-6 6 6 6"/></symbol>
+    <symbol id="ic-chevron" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="ic-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="ic-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+    <symbol id="ic-inbox" viewBox="0 0 24 24"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5a3 3 0 0 0 6 0h5"/></symbol>
+    <symbol id="ic-chart" viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/></symbol>
+    <symbol id="ic-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.5-5.8L4 8"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/></symbol>
+    <symbol id="ic-health" viewBox="0 0 24 24"><path d="M3 12h4l2 5 4-11 2 6h6"/></symbol>
+    <symbol id="ic-wallet" viewBox="0 0 24 24"><rect x="3.5" y="6" width="17" height="13"/><path d="M3.5 9.5h17"/><path d="M16.5 13.5h.01"/></symbol>
+    <symbol id="ic-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 8-7 10-4-2-7-5.6-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="ic-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.4 4 5.6 4 9s-1.4 6.6-4 9c-2.6-2.4-4-5.6-4-9s1.4-6.6 4-9z"/></symbol>
+  </defs>
+</svg>
+
+<!-- ============ TOPBAR ============ -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="slash">s/</span><span class="wordmark">Sidewrite</span></div>
+    <div class="topbar-status" id="topbarStatus"></div>
+    <span class="pill conn" id="conn"><span class="dot"></span><span id="connText">connecting…</span></span>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh runs"><svg class="icon" aria-hidden="true"><use href="#ic-refresh"></use></svg></button>
+      <!-- disabled for now: language / RTL switcher (trivially re-enable by uncommenting this button + its wiring in js/components/dir.js and js/main.js)
+      <button class="icon-btn" id="dirBtn" title="Toggle text direction (RTL / LTR)" aria-label="Toggle right-to-left layout" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#ic-globe"></use></svg></button>
+      -->
+      <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle light or dark theme"><svg class="icon" aria-hidden="true"><use href="#ic-moon"></use></svg></button>
+    </div>
+  </div>
+</div>
+
+<!-- No-provider attention banner (red/terracotta) — shown once we've heard back
+     from a providers fetch and it came back empty; see providers.js updateProviderGate(). -->
+<div class="gate-banner" id="gateBanner" hidden role="alert">
+  <div class="gate-banner-inner">
+    <span class="gate-banner-msg">⚠ No provider configured — add one to start delegating</span>
+    <button type="button" class="btn gate-banner-btn" data-goto-page="providers">Add a provider</button>
+  </div>
+</div>
+
+<!-- ============ TABS ============ -->
+<div class="tabrow">
+  <nav class="tabrow-inner" id="tabs" aria-label="Views">
+    <!-- PRIMARY: the essentials a first-time user needs, front and center. -->
+    <button class="tab" data-page="runs" aria-current="page"><svg class="icon sm" aria-hidden="true"><use href="#ic-runs"></use></svg>Runs</button>
+    <button class="tab" data-page="providers"><svg class="icon sm" aria-hidden="true"><use href="#ic-providers"></use></svg>Providers</button>
+    <button class="tab" data-page="studio"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Studio</button>
+
+    <!-- SECONDARY: still fully routable, just tucked behind "More" so they don't
+         compete with the primary tabs for a first-time user's attention. -->
+    <div class="tab-more">
+      <button type="button" class="tab tab-more-btn" id="moreBtn" aria-haspopup="true" aria-expanded="false" aria-controls="moreMenu">
+        <svg class="icon sm" aria-hidden="true"><use href="#ic-list"></use></svg>More
+        <svg class="icon sm tab-more-chev" aria-hidden="true"><use href="#ic-chevron"></use></svg>
+      </button>
+      <div class="tab-more-menu" id="moreMenu" hidden role="menu" aria-label="More views">
+        <button class="tab" data-page="analytics" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-chart"></use></svg>Analytics</button>
+        <button class="tab" data-page="health" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-health"></use></svg>Health</button>
+        <button class="tab" data-page="budgets" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-wallet"></use></svg>Budgets</button>
+        <button class="tab" data-page="privacy" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-shield"></use></svg>Privacy</button>
+      </div>
+    </div>
+
+    <label class="global-project" title="Filter by project">
+      <svg class="icon sm" aria-hidden="true"><use href="#ic-globe"></use></svg>
+      <select class="msel" id="globalProject" aria-label="Project filter"><option value="">All projects</option></select>
+    </label>
+  </nav>
+</div>
+
+<main>
+  <!-- Standalone "start your session" banner -->
+  <section class="card" id="standaloneBanner" hidden style="border-left:3px solid var(--accent); margin-bottom:22px;">
+    <div class="b-title" style="font-weight:600; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <svg class="icon sm" aria-hidden="true" style="color:var(--accent)"><use href="#ic-running"></use></svg>
+      Start your session: run <span class="cmd mono">sidewrite code</span> in your terminal
+    </div>
+    <div class="b-note" style="font-size:12.5px; color:var(--ink-muted); margin-top:8px;">
+      Ollama / OpenAI-style models need an Anthropic gateway (claude-code-router or LiteLLM in Anthropic mode) — point the provider's base URL at it.
+    </div>
+  </section>
+
+  <!-- ============ RUNS PAGE ============
+       #runsRoot  — live SSE view: now-running + running grid (list), or the
+                    unified run detail (Pipeline / Cost / Workers / Event log /
+                    Files / Diff / Re-run) for a focused run.
+       #runsHistory — the folded-in history browser (keyset-paginated recent runs
+                    + project filter); hidden while a run detail is open. -->
+  <section class="page" id="pageRuns">
+    <div id="runsRoot"></div>
+    <div id="runsHistory"></div>
+  </section>
+
+  <!-- ============ STUDIO PAGE (Skills + Sub-agents + MCP, one page, segmented —
+       everything here is GLOBAL: applies to every provider/model, now and for
+       any added later. No per-provider selection anywhere in this page.) ============ -->
+  <section class="page" id="pageStudio" hidden>
+    <div class="selrow" style="margin-bottom:14px;">
+      <div class="modeseg" id="studioSeg" role="group" aria-label="Studio section">
+        <button type="button" data-studio="skills" aria-pressed="true"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Skills</button>
+        <button type="button" data-studio="agents" aria-pressed="false"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Sub-agents</button>
+        <button type="button" data-studio="mcp" aria-pressed="false"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>MCP</button>
+      </div>
+      <span class="hint" style="margin-left:12px;">Global — applies to every provider/model, no per-provider selection.</span>
+    </div>
+
+    <div id="studioSkillsPane">
+      <div class="skills-cost-banner" id="skillsCostBanner"></div>
+
+      <div class="selrow skills-toolbar">
+        <span style="flex:1"></span>
+        <button type="button" class="btn" id="skillsRefresh"><svg class="icon sm" aria-hidden="true"><use href="#ic-refresh"></use></svg>Refresh</button>
+        <button type="button" class="btn" id="skillsSyncToggle"><svg class="icon sm" aria-hidden="true"><use href="#ic-copy"></use></svg>Sync from Claude Code</button>
+        <button type="button" class="btn primary" id="skillsPullToggle"><svg class="icon sm" aria-hidden="true"><use href="#ic-plus"></use></svg>Pull skill</button>
+      </div>
+
+      <div id="skillsTableWrap"></div>
+      <div class="empty" id="skillsEmpty" style="margin-top:14px;">Loading…</div>
+
+      <div class="skills-pull" id="skillsPullPanel" hidden style="margin-top:18px;">
+        <p class="eyebrow">Pull a plugin / skill into every station</p>
+        <form id="skillsPullForm">
+          <div class="fields">
+            <div class="field">
+              <label class="field-lbl" for="pullPlugin">Plugin spec</label>
+              <input type="text" class="tf" id="pullPlugin" placeholder="plugin-name or plugin@marketplace" autocomplete="off">
+            </div>
+            <div class="field">
+              <label class="field-lbl" for="pullMarketplace">Marketplace <span class="hint">(optional)</span></label>
+              <input type="text" class="tf" id="pullMarketplace" placeholder="owner/repo or URL" autocomplete="off">
+            </div>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center; margin-top:10px;">
+            <button type="submit" class="btn primary" id="pullSubmit">Install</button>
+            <span class="form-msg" id="skillsPullMsg"></span>
+          </div>
+          <div class="hint" style="margin-top:8px;">Installs via <span class="cmd mono">claude plugin install</span> into every station's isolated config (~/.claude-&lt;provider&gt;) — never ~/.claude.</div>
+        </form>
+      </div>
+
+      <div class="skills-pull" id="skillsSyncPanel" hidden style="margin-top:18px;">
+        <p class="eyebrow">Sync your global Claude Code skills into every station</p>
+        <div class="hint" style="margin:0 0 12px;">Copies from your global <span class="cmd mono">~/.claude/skills</span> into every station's isolated config — <b>read-only of ~/.claude</b>. Every enabled skill rides <em>every</em> run's prompt, on every model.</div>
+        <div id="skillsSyncList" class="sync-list"></div>
+        <div style="display:flex; gap:12px; align-items:center; margin-top:12px;">
+          <span class="mono" id="skillsSyncCount" style="font-size:12px; color:var(--ink-muted);">0 selected</span>
+          <button type="button" class="btn" id="skillsSyncAll">Select all</button>
+          <button type="button" class="btn primary" id="skillsSyncCopy" disabled>Copy to every station</button>
+          <span class="form-msg" id="skillsSyncMsg"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="studioAgentsPane" hidden>
+      <div id="agentsRoot"></div>
+    </div>
+
+    <div id="studioMcpPane" hidden>
+      <div class="card" style="padding:12px 14px;">
+        <div class="hint" style="margin-bottom:10px;"><b>Why this exists:</b> some provider models are smaller or have an older training cutoff, so they can guess at outdated APIs instead of the real ones. Context7 gives the model a live lookup for current, version-pinned docs — it's told to check here before writing code from memory, even for well-known libraries.</div>
+        <div class="selrow" style="gap:10px; flex-wrap:wrap;">
+          <input type="password" class="tf" id="ctx7ApiKey" placeholder="paste ctx7sk-… key" autocomplete="off" style="flex:1; min-width:220px;">
+          <button type="button" class="btn primary" id="ctx7Save">Save</button>
+          <button type="button" class="btn" id="ctx7Remove" hidden>Remove</button>
+          <span class="badge" id="ctx7Status" hidden></span>
+        </div>
+        <div class="hint" style="margin-top:8px;">Fetches current, version-pinned library/framework docs into every station, so weaker or older-cutoff provider models write code against real docs instead of stale training data. The key is encrypted at rest and never leaves this server.</div>
+        <span class="form-msg" id="ctx7Msg"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PROVIDERS PAGE (mode + active model + registry) ============ -->
+  <section class="page" id="pageProviders" hidden>
+    <div class="card" style="padding:10px 14px;">
+      <div class="selrow" style="gap:10px;">
+        <span class="hint" style="text-transform:uppercase; letter-spacing:.04em;">Run mode</span>
+        <div class="modeseg" id="modeSeg" role="group" aria-label="Run mode">
+          <button type="button" data-mode="subscription" aria-pressed="false">subscription</button>
+          <button type="button" data-mode="standalone" aria-pressed="false">standalone</button>
+        </div>
+        <p class="modenote hint" id="modeNote" style="margin:0;">Mode: not set. Choose how Sidewrite runs Claude Code.</p>
+      </div>
+
+      <div class="stand-settings" id="standSettings" hidden style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border-rule);">
+        <details id="standDetails">
+          <summary class="eyebrow" style="cursor:pointer;">Standalone session <span class="hint">— session provider &amp; model aliases (click to configure)</span></summary>
+          <div style="margin-top:12px;">
+            <div class="field">
+              <label class="field-lbl" for="sessProvider">Session provider <span class="hint">(backs interactive Claude Code)</span></label>
+              <select class="msel" id="sessProvider"><option value="">Select a provider…</option></select>
+            </div>
+            <div class="hint" id="aliasFreetierNote" hidden style="margin-top:10px;">The pool maps its own sonnet/opus/haiku aliases automatically — nothing to configure here.</div>
+            <div id="aliasGrid">
+              <div class="hint" style="margin:10px 0 4px;">Map provider models onto the Claude aliases:</div>
+              <div class="alias-grid" style="display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
+                <div class="field"><label class="field-lbl" for="aliasSonnet">sonnet</label><select class="msel" id="aliasSonnet"><option value="">—</option></select></div>
+                <div class="field"><label class="field-lbl" for="aliasOpus">opus</label><select class="msel" id="aliasOpus"><option value="">—</option></select></div>
+                <div class="field"><label class="field-lbl" for="aliasHaiku">haiku</label><select class="msel" id="aliasHaiku"><option value="">—</option></select></div>
+              </div>
+            </div>
+            <div style="display:flex; gap:12px; align-items:center; margin-top:12px;">
+              <button type="button" class="btn primary" id="saveStand">Save standalone settings</button>
+              <span class="form-msg" id="standMsg"></span>
+            </div>
+            <div class="hint" style="margin-top:8px;">The alias map guides <span class="cmd mono">sidewrite code</span>. Local / OpenAI-style providers need an Anthropic gateway (claude-code-router / LiteLLM).</div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="eyebrow">Active model <span class="count">— used for the next delegated run</span></p>
+      <div class="selrow">
+        <select class="msel" id="activeSelect" aria-label="Active model"><option value="">Select a model…</option></select>
+        <span class="badge live" id="activeBadge" hidden><span class="bdot pulse"></span>active</span>
+        <span class="cmdchip" style="margin-left:auto;"><span class="g">$</span><code>sidewrite delegate</code><span class="cp"><svg class="icon sm" aria-hidden="true"><use href="#ic-copy"></use></svg>copy</span></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="selrow" style="margin-bottom:14px;">
+        <div class="modeseg" id="provTrackSeg" role="group" aria-label="Provider track">
+          <button type="button" data-track="freetier" aria-pressed="true">Free Lane</button>
+          <button type="button" data-track="own" aria-pressed="false">Your Providers</button>
+        </div>
+      </div>
+
+    <div id="trackOwnPane" hidden>
+      <p class="eyebrow">Providers <span class="count" id="provCount">(0)</span></p>
+      <div class="empty" id="provEmpty" hidden>No providers registered yet. Add one below.</div>
+      <div class="grid auto" id="provList"></div>
+
+      <!-- Add-provider block (relocated into the onboarding host during onboarding) -->
+      <div class="addprov" style="margin-top:24px;">
+        <p class="eyebrow">Add a provider</p>
+
+        <!-- Catalog -->
+        <div class="tabpane" data-pane="catalog">
+          <div class="hint">Pick a provider from the bundled catalog, edit its base URL if you need to, paste one API key, then fetch that provider's models.</div>
+          <div class="field">
+            <label class="field-lbl" for="catSelect">Provider</label>
+            <select class="msel" id="catSelect"><option value="">Loading catalog…</option></select>
+          </div>
+          <div class="catnote" id="catNote" hidden></div>
+          <div class="fields">
+            <div class="field">
+              <label class="field-lbl" for="catName">Provider name</label>
+              <input type="text" class="tf" id="catName" placeholder="provider" autocomplete="off">
+            </div>
+            <div class="field">
+              <label class="field-lbl" for="catBaseUrl">Base URL <span class="hint">(editable)</span></label>
+              <input type="text" class="tf" id="catBaseUrl" placeholder="https://…" autocomplete="off">
+            </div>
+            <div class="field full">
+              <label class="field-lbl" for="catModelsEndpoint">Models endpoint <span class="hint">(path joined onto Base URL, or an absolute http(s) URL)</span></label>
+              <input type="text" class="tf" id="catModelsEndpoint" placeholder="/v1/models" autocomplete="off">
+            </div>
+            <div class="field full">
+              <label class="field-lbl" for="catKey">API key <span class="hint" id="catKeyHint"></span></label>
+              <input type="password" class="tf" id="catKey" placeholder="paste key" autocomplete="off">
+            </div>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center;">
+            <button type="button" class="btn" id="catFetch">Fetch models</button>
+            <span class="form-msg" id="catFetchMsg"></span>
+          </div>
+          <div class="orpicker">
+            <div class="orpicker-tools">
+              <input type="text" class="tf" id="catSearch" placeholder="Search models…" autocomplete="off">
+            </div>
+            <div class="orlist" id="catList"><div class="empty" style="padding:20px">Select a provider and click “Fetch models”.</div></div>
+            <div style="display:flex; gap:12px; align-items:center;">
+              <span class="orcount" id="catCount" style="margin-left:0">0 selected</span>
+              <button type="button" class="btn" id="catSelectAll">Select all</button>
+            </div>
+            <div style="display:flex; gap:12px; align-items:center;">
+              <button type="button" class="btn primary" id="catAdd" disabled>Add selected</button>
+              <span class="form-msg" id="catAddMsg"></span>
+            </div>
+            <div class="hint">Models are appended and your saved key is preserved when the field is left blank.</div>
+          </div>
+        </div>
+      </div>
+    </div> <!-- /trackOwnPane -->
+
+    <div id="freetierPane">
+      <div id="freetierRoot"></div>
+    </div>
+    </div>
+  </section>
+
+  <!-- Free Lane "View models" popup: scoped per-provider model list, searchable,
+       scrolls internally instead of growing the provider card — content is
+       rendered by freetier.js -->
+  <div class="modal-overlay" id="ftModelModal" hidden>
+    <div class="modal" id="ftModelModalBody" style="max-width:820px;"></div>
+  </div>
+
+  <!-- ============ ANALYTICS PAGE (owns #analyticsRoot) ============ -->
+  <section class="page" id="pageAnalytics" hidden>
+    <p class="eyebrow"><svg class="icon sm" aria-hidden="true"><use href="#ic-chart"></use></svg>Analytics — cost &amp; token trends</p>
+    <div id="analyticsRoot"></div>
+  </section>
+
+  <!-- (History is no longer a separate page — it's folded into the Runs tab
+        above as the #runsHistory browser.) -->
+
+  <!-- ============ BUDGETS PAGE (owns #budgetsRoot) ============ -->
+  <section class="page" id="pageBudgets" hidden>
+    <p class="eyebrow"><svg class="icon sm" aria-hidden="true"><use href="#ic-wallet"></use></svg>Cost budgets &amp; alerts</p>
+    <div id="budgetsRoot"></div>
+  </section>
+
+  <!-- ============ HEALTH PAGE (owns #healthRoot; #healthRefresh lives in the toolbar) ============ -->
+  <section class="page" id="pageHealth" hidden>
+    <div class="selrow" style="justify-content:space-between;">
+      <p class="eyebrow" style="margin:0;"><svg class="icon sm" aria-hidden="true"><use href="#ic-health"></use></svg>System health</p>
+      <button type="button" class="btn" id="healthRefresh"><svg class="icon sm" aria-hidden="true"><use href="#ic-refresh"></use></svg>Refresh</button>
+    </div>
+    <div id="healthRoot"></div>
+  </section>
+
+  <!-- ============ PRIVACY PAGE (owns #privacyRoot) ============ -->
+  <section class="page" id="pagePrivacy" hidden>
+    <p class="eyebrow"><svg class="icon sm" aria-hidden="true"><use href="#ic-shield"></use></svg>Privacy &amp; data</p>
+    <div id="privacyRoot"></div>
+  </section>
+</main>
+
+<!-- First-run onboarding modal (blocking) -->
+<div class="modal-overlay" id="onboardModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="onboardTitle">
+    <!-- Step 1: subscription question -->
+    <div id="onboardStepMode">
+      <div class="modal-head">
+        <h2 id="onboardTitle">Do you have a Claude subscription?</h2>
+        <p>This sets how Sidewrite runs Claude Code. You can change it later in Settings.</p>
+      </div>
+      <div class="modal-body">
+        <div class="modal-choices">
+          <button type="button" class="choice-btn" id="obSubscription">
+            <span class="c-title">I have a subscription</span>
+            <span class="c-sub">Use your Claude subscription interactively; delegate implement steps to providers.</span>
+          </button>
+          <button type="button" class="choice-btn" id="obStandalone">
+            <span class="c-title">Standalone (no subscription)</span>
+            <span class="c-sub">Run Claude Code on your own external provider via a base-URL swap.</span>
+          </button>
+        </div>
+        <span class="form-msg" id="obModeMsg"></span>
+      </div>
+    </div>
+    <!-- Step 2: add a provider first -->
+    <div id="onboardStepProvider" hidden>
+      <div class="modal-head">
+        <h2>Add a provider first</h2>
+        <p id="obProviderSub">Add at least one provider to finish setup.</p>
+      </div>
+      <div class="modal-body">
+        <div id="onboardProvHost"></div>
+        <span class="modal-step-note" id="obProvCount">No providers yet.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script type="module" src="/js/main.js"></script>

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "sidewrite",
+  "version": "0.2.0",
+  "description": "Delegate the implement step to any anthropic-compatible provider (GLM/DeepSeek/…) running headless on its own API key, while planning and reviewing stay on your interactive Claude subscription. Ships a local SSE dashboard: add providers, activate a model, and watch plan → implement → review live with cost tracking.",
+  "author": {
+    "name": "Sidewrite"
+  },
+  "homepage": "https://github.com/hassanalitamam/sidewrite",
+  "repository": "https://github.com/hassanalitamam/sidewrite",
+  "license": "Apache-2.0",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "plugin",
+    "dashboard",
+    "sse",
+    "multi-provider",
+    "headless",
+    "glm",
+    "deepseek",
+    "cost-tracking"
+  ]
+}
