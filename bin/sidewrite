@@ -269,19 +269,41 @@ case "$cmd" in
     # conversation another model had been carrying.
     #
     # Fix: right before launching, mirror every OTHER known session store's
-    # history for this exact directory into the one we're about to use —
-    # read-only, symlinks only, one directory (projects/<encoded-cwd>) at a
-    # time. This never touches credentials/auth/settings — only ever adds
-    # symlinks to *.jsonl transcript files inside our own already-isolated
-    # ~/.claude-<provider> tree, and ~/.claude itself is never written to.
-    # Run every time `sidewrite code` launches, for whichever provider is
-    # about to run, so the model you just switched to always sees (and can
-    # continue) whatever every other model already did here.
+    # history for this exact directory into the one we're about to use — one
+    # directory (projects/<encoded-cwd>) at a time. This never touches
+    # credentials/auth/settings — only ever adds *.jsonl transcript entries
+    # inside our own already-isolated ~/.claude-<provider> tree, and
+    # ~/.claude itself is never written to. Run every time `sidewrite code`
+    # launches, for whichever provider is about to run, so the model you just
+    # switched to always sees (and can continue) whatever every other model
+    # already did here.
+    #
+    # HARD links, not symlinks: `claude --resume`'s own session lister
+    # enumerates the directory with Node's `fs.readdirSync(dir, {withFileTypes:
+    # true})` and filters on `Dirent.isFile()` — which reflects the raw
+    # on-disk dirent TYPE (DT_LNK vs DT_REG) and does NOT follow the link, so
+    # a symlinked .jsonl reports isFile()===false and is silently invisible to
+    # the resume picker even though `ls` shows it fine. A hard link has no
+    # distinct type from an ordinary file (same inode, so isFile()===true)
+    # while still sharing the exact same bytes as the original — an append to
+    # the source is instantly visible through the hard-linked name too. This
+    # only works within the same filesystem, which ~/.claude and every
+    # ~/.claude-<provider> always are (all under $HOME).
     _sw_link_session_history() {
-      local prov="$1" encoded my_dir other_dir dir f base
+      local prov="$1" encoded my_dir other_dir dir f base target
       encoded="$(pwd | sed 's/[\/.]/-/g')"
       my_dir="$HOME/.claude-$prov/projects/$encoded"
       mkdir -p "$my_dir"
+      # Repair pass: earlier versions of this function used symlinks, which
+      # are invisible to --resume for the reason above. Replace any leftover
+      # symlinked .jsonl here with a proper hard link to the same target.
+      for f in "$my_dir"/*.jsonl; do
+        [ -L "$f" ] || continue
+        target="$(readlink "$f")"
+        [ -e "$target" ] || { rm -f "$f"; continue; }
+        rm -f "$f"
+        ln "$target" "$f" 2>/dev/null || ln -s "$target" "$f" 2>/dev/null
+      done
       for dir in "$HOME/.claude" "$HOME"/.claude-*; do
         [ "$dir" = "$HOME/.claude-$prov" ] && continue
         other_dir="$dir/projects/$encoded"
@@ -289,7 +311,10 @@ case "$cmd" in
         for f in "$other_dir"/*.jsonl; do
           [ -e "$f" ] || continue
           base="$(basename "$f")"
-          [ -e "$my_dir/$base" ] || ln -s "$f" "$my_dir/$base" 2>/dev/null
+          # Fail-soft fallback to a symlink only if the hard link itself can't
+          # be created (e.g. an unexpected cross-device mount) — still better
+          # than nothing, even though it would carry the same isFile() gap.
+          [ -e "$my_dir/$base" ] || ln "$f" "$my_dir/$base" 2>/dev/null || ln -s "$f" "$my_dir/$base" 2>/dev/null
         done
       done
     }

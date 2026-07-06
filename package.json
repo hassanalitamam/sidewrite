@@ -1,6 +1,6 @@
 {
   "name": "sidewrite",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Delegate the implement step to any anthropic-compatible provider (GLM/DeepSeek/…) running headless on its own API key, while planning and reviewing stay on your interactive Claude subscription. Ships a local SSE dashboard and installs as a global Claude Code plugin. No external deps (node:sqlite, node:http).",
   "keywords": [
     "claude",
