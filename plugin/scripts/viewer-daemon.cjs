@@ -4365,6 +4365,23 @@ function router(req, res) {
   // Tools — token-saving features (Terse Mode, Pool Compact, RTK Rewrite)
   // ---------------------------------------------------------------------------
 
+  // Compaction cache stats: reads plugin/scripts/pool-compact-cache.cjs's own
+  // storage dir directly (no coupling to that module's internals) — cheap
+  // stat() pass, never throws.
+  function poolCompactCacheStats() {
+    const dir = path.join(HOME, '.sidewrite', 'pool-compact-cache');
+    try {
+      const files = fs.readdirSync(dir);
+      let totalBytes = 0;
+      for (const f of files) {
+        try { totalBytes += fs.statSync(path.join(dir, f)).size; } catch (_) { /* raced/removed */ }
+      }
+      return { fileCount: files.length, totalBytes };
+    } catch (_) {
+      return { fileCount: 0, totalBytes: 0 };
+    }
+  }
+
   // GET /api/tools — read the enabled state of token-saving features from config
   if (pathname === '/api/tools' && method === 'GET') {
     try {
@@ -4386,6 +4403,7 @@ function router(req, res) {
           rtkRewrite: features.rtkRewrite !== false,
         },
         rtkDetected,
+        cache: poolCompactCacheStats(),
       });
     } catch (e) {
       sendJson(res, 500, { ok: false, error: e.message });
@@ -4409,6 +4427,26 @@ function router(req, res) {
         sendJson(res, 500, { ok: false, error: e.message });
       }
     });
+    return;
+  }
+
+  // POST /api/tools/cache/clear — delete every cached (retrievable) block from
+  // the pool-compact CCR store. Safe: only removes the local recovery copies;
+  // does not affect the compacted markers already embedded in in-flight
+  // requests (those just become non-retrievable, same as an expired ref).
+  if (pathname === '/api/tools/cache/clear' && method === 'POST') {
+    try {
+      const dir = path.join(HOME, '.sidewrite', 'pool-compact-cache');
+      let removed = 0;
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          try { fs.unlinkSync(path.join(dir, f)); removed++; } catch (_) { /* raced/removed */ }
+        }
+      } catch (_) { /* dir doesn't exist yet — nothing to clear */ }
+      sendJson(res, 200, { ok: true, removed });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: e.message });
+    }
     return;
   }
 

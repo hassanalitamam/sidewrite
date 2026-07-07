@@ -12,7 +12,15 @@ const toolsState = {
     rtkRewrite: true,
   },
   rtkDetected: true,
+  cache: { fileCount: 0, totalBytes: 0 },
 };
+
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
 
 // Enter hook for the router.
 export async function enterTools() {
@@ -21,6 +29,7 @@ export async function enterTools() {
     if (r && r.ok) {
       toolsState.features = r.features || toolsState.features;
       toolsState.rtkDetected = !!r.rtkDetected;
+      toolsState.cache = r.cache || toolsState.cache;
       toolsState.loaded = true;
     }
   } catch (err) {
@@ -43,9 +52,34 @@ export function renderTools() {
   if (rtkCard) {
     rtkCard.hidden = !!toolsState.rtkDetected;
   }
+
+  // Retrieval cache stats (the local store behind history compaction's
+  // pool_retrieve tool — see plugin/scripts/pool-compact-cache.cjs)
+  const statsEl = $("#compactCacheStats");
+  if (statsEl) {
+    const { fileCount, totalBytes } = toolsState.cache;
+    statsEl.textContent = "Retrieval cache: " + fileCount + " item" + (fileCount === 1 ? "" : "s") + ", " + fmtBytes(totalBytes);
+  }
 }
 
 export function wireTools() {
+  const clearBtn = $("#compactCacheClear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      clearBtn.disabled = true;
+      try {
+        const r = await api("/api/tools/cache/clear", { method: "POST" });
+        toolsState.cache = { fileCount: 0, totalBytes: 0 };
+        renderTools();
+        toast("Cleared " + ((r && r.removed) || 0) + " cached item(s)", "ok");
+      } catch (err) {
+        toast("Clear cache failed: " + err.message, "err");
+      } finally {
+        clearBtn.disabled = false;
+      }
+    });
+  }
+
   // Delegate click handler for tool toggles
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-tool-toggle]");
