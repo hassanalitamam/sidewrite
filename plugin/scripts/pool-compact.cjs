@@ -34,14 +34,41 @@ function hashBlock(text) {
   return crypto.createHash('md5').update(text).digest('hex');
 }
 
+// Helper: flatten an Anthropic content value (string | array of blocks) to text.
+// tool_result.content is frequently an array of {type:'text',text} parts in real
+// Claude Code traffic, not a bare string — measure/hash on the flattened text so
+// compaction actually engages on that shape (and never call .length on an array).
+function flattenToText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((b) => b && b.type === 'text')
+    .map((b) => (typeof b.text === 'string' ? b.text : ''))
+    .join('\n');
+}
+
 // Helper: extract text from a content block
 function extractTextFromBlock(block) {
   if (typeof block === 'string') return block;
   if (block && typeof block === 'object') {
-    if (block.type === 'text' && block.text) return block.text;
-    if (block.type === 'tool_result' && block.content) return block.content;
+    if (block.type === 'text' && typeof block.text === 'string') return block.text;
+    if (block.type === 'tool_result' && block.content != null) return flattenToText(block.content);
   }
   return null;
+}
+
+// Helper: return a NEW block with its text payload replaced by newText, preserving
+// block structure (type, tool_use_id, is_error, cache_control, ...). For a
+// tool_result whose content was an array, collapse to a single text part so the
+// tool_use/tool_result pairing (tool_use_id) is never dropped.
+function setBlockText(block, newText) {
+  if (typeof block === 'string') return newText;
+  if (block && block.type === 'text') return Object.assign({}, block, { text: newText });
+  if (block && block.type === 'tool_result') {
+    const content = typeof block.content === 'string' ? newText : [{ type: 'text', text: newText }];
+    return Object.assign({}, block, { content });
+  }
+  return block;
 }
 
 // Helper: check if a block is text or tool_result
@@ -70,14 +97,7 @@ function truncateBlock(block, headChars, tailChars) {
   const marker = `[... ${omittedCount} chars truncated ...]`;
   const truncated = head + '\n' + marker + '\n' + tail;
 
-  if (typeof block === 'string') {
-    return truncated;
-  } else if (block && block.type === 'text') {
-    return Object.assign({}, block, { text: truncated });
-  } else if (block && block.type === 'tool_result') {
-    return Object.assign({}, block, { content: truncated });
-  }
-  return block;
+  return setBlockText(block, truncated);
 }
 
 // Helper: replace a block with a short placeholder
@@ -134,9 +154,11 @@ function applyPoolCompact(anthropicReq) {
         const hash = hashBlock(extractTextFromBlock(block));
         const seen = seenLargeBlocks[hash];
         if (seen && (msgIdx > seen.firstIndex || (msgIdx === seen.firstIndex && blockIdx > seen.firstBlockIndex))) {
-          // This is a duplicate — replace with placeholder
+          // This is a duplicate — replace payload with placeholder, but keep the
+          // block structure so a tool_result never loses its tool_use_id (which
+          // would break Anthropic tool_use/tool_result pairing at dispatch).
           modified = true;
-          return makePlaceholder(size);
+          return setBlockText(block, makePlaceholder(size));
         }
       }
 
