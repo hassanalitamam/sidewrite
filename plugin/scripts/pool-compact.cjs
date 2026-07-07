@@ -40,17 +40,15 @@ function isPoolCompactEnabled() {
   return true; // enabled by default
 }
 
-// Default: only start compacting once the WHOLE request is already at ~6000
-// tokens (~24000 chars, assuming ~4 chars/token — the same rough ratio used
-// elsewhere in this codebase for pre-flight estimates). Free-tier models
-// commonly have small context windows (many sit around 8K-32K tokens), and
-// the goal here is the same "compact proactively, well before you actually
-// hit the wall" posture used by Claude Code's own /compact guidance — not
-// "compact any request that happens to contain a duplicated block", which
-// would destructively touch small conversations that never needed it.
-// Configurable via features.poolCompactMinTokens for setups whose registered
-// providers all have larger context windows.
-const DEFAULT_MIN_TRIGGER_TOKENS = 6000;
+// Default: only start compacting once the WHOLE request is already at
+// ~100000 tokens (~400000 chars, assuming ~4 chars/token — the same rough
+// ratio used elsewhere in this codebase for pre-flight estimates). The goal
+// is the same "compact proactively, well before you actually hit the wall"
+// posture used by Claude Code's own /compact guidance — not "compact any
+// request that happens to contain a duplicated block", which would
+// destructively touch conversations that never needed it. Configurable via
+// features.poolCompactMinTokens.
+const DEFAULT_MIN_TRIGGER_TOKENS = 100000;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 function minTriggerChars() {
