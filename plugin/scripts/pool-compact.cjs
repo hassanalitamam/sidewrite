@@ -8,11 +8,13 @@
  *   - Deduplicates large identical text/tool_result blocks (>1000 chars)
  *   - Truncates very long blocks (>8000 chars) to head + tail (except last message)
  *   - Never drops or reorders messages, never touches .system
+ *   - Stores omitted content in cache for on-demand retrieval (CCR pattern)
  *   - Node core only, no external dependencies
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { storeOriginal, retrieveOriginal } = require('./pool-compact-cache.cjs');
 
 // Read ~/.sidewrite/config.json; if cfg.features.poolCompact === false, return input unchanged.
 // Missing file/key means enabled (default true).
@@ -86,22 +88,37 @@ function getBlockSize(block) {
   return text ? text.length : 0;
 }
 
-// Helper: truncate a block to head + tail with marker
-function truncateBlock(block, headChars, tailChars) {
+// Helper: truncate a block to head + tail with marker.
+// If ccrEnabled, caches the omitted middle segment and includes a ref in the marker
+function truncateBlock(block, headChars, tailChars, ccrEnabled = false) {
   const text = extractTextFromBlock(block);
   if (!text || text.length <= headChars + tailChars) return block;
 
   const head = text.slice(0, headChars);
   const tail = text.slice(-tailChars);
   const omittedCount = text.length - headChars - tailChars;
-  const marker = `[... ${omittedCount} chars truncated ...]`;
+  let marker;
+  if (ccrEnabled) {
+    // Cache only the omitted middle segment (not head/tail)
+    const omittedMiddle = text.slice(headChars, text.length - tailChars);
+    const ref = storeOriginal(omittedMiddle);
+    marker = `[... ${omittedCount} chars truncated, ref: ${ref} -- use pool_retrieve to see it ...]`;
+  } else {
+    marker = `[... ${omittedCount} chars truncated ...]`;
+  }
+
   const truncated = head + '\n' + marker + '\n' + tail;
 
   return setBlockText(block, truncated);
 }
 
-// Helper: replace a block with a short placeholder
-function makePlaceholder(originalSize) {
+// Helper: replace a block with a short placeholder.
+// If ccrEnabled, caches the full original block and includes a ref
+function makePlaceholder(originalSize, ccrEnabled = false, originalText = null) {
+  if (ccrEnabled && originalText) {
+    const ref = storeOriginal(originalText);
+    return `[duplicate of earlier output, ${originalSize} chars, ref: ${ref} -- use pool_retrieve to see it]`;
+  }
   return `[duplicate of earlier output, ${originalSize} chars, omitted]`;
 }
 
@@ -118,8 +135,14 @@ function applyPoolCompact(anthropicReq) {
     return anthropicReq;
   }
 
+  // CCR (Compress-Cache-Retrieve) is ONLY safe for non-streaming requests.
+  // Streaming requests already have bytes flushed to the client as they arrive,
+  // so there's no way to intercept a tool-use turn and loop before the client
+  // sees it. For streaming, keep the old plain-marker behavior (no refs, no tool).
+  const ccrEnabled = anthropicReq.stream !== true;
+
   // Track seen large blocks (hash -> size) for deduplication
-  const seenLargeBlocks = {}; // hash -> { size, firstIndex, firstBlockIndex }
+  const seenLargeBlocks = {}; // hash -> { size, firstIndex, firstBlockIndex, originalText }
   const messagesToModify = []; // array of indices that need changes
 
   // First pass: identify large blocks and deduplications
@@ -131,12 +154,16 @@ function applyPoolCompact(anthropicReq) {
       const size = getBlockSize(block);
       if (size < 1000) return; // only track large blocks
 
-      const hash = hashBlock(extractTextFromBlock(block));
+      const originalText = extractTextFromBlock(block);
+      const hash = hashBlock(originalText);
       if (!seenLargeBlocks[hash]) {
-        seenLargeBlocks[hash] = { size, firstIndex: msgIdx, firstBlockIndex: blockIdx };
+        seenLargeBlocks[hash] = { size, firstIndex: msgIdx, firstBlockIndex: blockIdx, originalText };
       }
     });
   });
+
+  // Track whether any compaction actually happens
+  let didCompact = false;
 
   // Second pass: build new messages array with deduplication and truncation
   const newMessages = messages.map((msg, msgIdx) => {
@@ -151,21 +178,25 @@ function applyPoolCompact(anthropicReq) {
 
       // Rule a: deduplication for blocks >= 1000 chars
       if (size >= 1000) {
-        const hash = hashBlock(extractTextFromBlock(block));
+        const originalText = extractTextFromBlock(block);
+        const hash = hashBlock(originalText);
         const seen = seenLargeBlocks[hash];
         if (seen && (msgIdx > seen.firstIndex || (msgIdx === seen.firstIndex && blockIdx > seen.firstBlockIndex))) {
           // This is a duplicate — replace payload with placeholder, but keep the
           // block structure so a tool_result never loses its tool_use_id (which
           // would break Anthropic tool_use/tool_result pairing at dispatch).
           modified = true;
-          return setBlockText(block, makePlaceholder(size));
+          didCompact = true;
+          const placeholder = makePlaceholder(size, ccrEnabled, originalText);
+          return setBlockText(block, placeholder);
         }
       }
 
       // Rule b: truncation for blocks > 8000 chars, EXCEPT in the very last message
       if (size > 8000 && msgIdx < messages.length - 1) {
         modified = true;
-        return truncateBlock(block, 2000, 500);
+        didCompact = true;
+        return truncateBlock(block, 2000, 500, ccrEnabled);
       }
 
       return block;
@@ -179,8 +210,35 @@ function applyPoolCompact(anthropicReq) {
     return msg;
   });
 
-  // Return new object with shallow copy + new messages array
-  return Object.assign({}, anthropicReq, { messages: newMessages });
+  // Build the result
+  let result = Object.assign({}, anthropicReq, { messages: newMessages });
+
+  // If compaction happened and CCR is enabled, inject the pool_retrieve tool
+  if (didCompact && ccrEnabled) {
+    const retrieveTool = {
+      name: 'pool_retrieve',
+      description: 'Retrieve the full original text of a context block that was omitted or truncated for length. Call with the exact ref string shown in the omitted/truncated marker.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string' },
+        },
+        required: ['ref'],
+      },
+    };
+
+    if (result.tools && Array.isArray(result.tools)) {
+      // Check if pool_retrieve already exists to avoid duplicates
+      if (!result.tools.some((t) => t.name === 'pool_retrieve')) {
+        result = Object.assign({}, result, { tools: [...result.tools, retrieveTool] });
+      }
+    } else {
+      // Create tools array if it doesn't exist
+      result = Object.assign({}, result, { tools: [retrieveTool] });
+    }
+  }
+
+  return result;
 }
 
-module.exports = { applyPoolCompact };
+module.exports = { applyPoolCompact, retrieveOriginal };
