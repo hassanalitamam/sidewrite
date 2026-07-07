@@ -108,16 +108,19 @@ function runHook() {
     // Pass the command as a single argv element, never via shell string
     execFile('rtk', ['rewrite', originalCommand], { timeout: 2000 }, (err, stdout, stderr) => {
       try {
-        // If rtk binary not found or any error, silently passthrough
-        if (err) {
-          // ENOENT = binary not found, ETIMEDOUT = timeout, or other errors
+        // Distinguish a spawn/timeout failure from a normal non-zero exit.
+        // On a normal non-zero exit, execFile still reports `err` but err.code
+        // is the NUMERIC exit code. On spawn failure (rtk absent) err.code is a
+        // string like 'ENOENT'; on timeout the process is killed (err.killed).
+        if (err && (err.killed || typeof err.code !== 'number')) {
+          // Binary not found (ENOENT), timeout/kill, or any non-exit failure:
+          // silent passthrough, never block.
           safeExit();
         }
 
-        // Interpret exit code
-        // Note: execFile returns exit code in err.code for non-zero exits
-        // For exit code 0, err will be null
-        const exitCode = err ? (err.code || 1) : 0;
+        // For exit code 0, err is null. For non-zero exits, err.code holds the
+        // numeric exit code.
+        const exitCode = err ? err.code : 0;
 
         const rewrittenCommand = stdout ? stdout.trim() : '';
 
