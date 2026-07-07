@@ -45,6 +45,7 @@ const crypto = require('node:crypto');
 const store = require('./pool-store.cjs');
 const { adapterFor, streamOpenAIToAnthropic, streamGeminiToAnthropic } = require('./pool-adapters.cjs');
 const limiter = require('./pool-limiter.cjs');
+const { applyPoolCompact } = require('./pool-compact.cjs');
 
 const TIER_FALLBACK_ORDER = {
   opus: ['opus', 'sonnet', 'haiku'],
@@ -391,6 +392,7 @@ async function dispatchStreamingOne(candidate, anthropicReq, requestedModel, res
 //   { handled: false, status, json }                — caller must send this
 // ---------------------------------------------------------------------------
 async function routeMessage(req, res, anthropicReq) {
+  anthropicReq = applyPoolCompact(anthropicReq);
   sweepSessions();
   const requestedTier = tierForModel(anthropicReq.model);
   const sessionKey = sessionKeyFor(req, anthropicReq);
