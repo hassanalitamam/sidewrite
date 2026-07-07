@@ -10,6 +10,7 @@ import { renderStatus } from "./components/status.js";
 import { renderSkillsBanner, wireSkills } from "./views/skills.js";
 import { wireAgents } from "./views/agents.js";
 import { wireStudio } from "./views/studio.js";
+import { wireTools } from "./views/tools.js";
 import { initAddProvider, updateKeyHints } from "./views/addprovider.js";
 import { refreshOnboarding, wireStandalone } from "./views/onboarding.js";
 import { wireAnalytics } from "./views/analytics.js";
@@ -125,6 +126,7 @@ function boot() {
   wireSkills();
   wireAgents();
   wireStudio();
+  wireTools();
   wireStandalone();
   wireAnalytics();
   wireRuns();          // run-detail actions (Re-run / Files / Diff) on #runsRoot
