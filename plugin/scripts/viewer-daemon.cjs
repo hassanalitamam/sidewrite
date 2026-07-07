@@ -4362,6 +4362,57 @@ function router(req, res) {
   }
 
   // ---------------------------------------------------------------------------
+  // Tools — token-saving features (Terse Mode, Pool Compact, RTK Rewrite)
+  // ---------------------------------------------------------------------------
+
+  // GET /api/tools — read the enabled state of token-saving features from config
+  if (pathname === '/api/tools' && method === 'GET') {
+    try {
+      const cfg = readConfig();
+      const features = cfg.features || {};
+      let rtkDetected = false;
+      try {
+        const { execFileSync } = require('node:child_process');
+        execFileSync('rtk', ['--version'], { timeout: 1500 });
+        rtkDetected = true;
+      } catch (_) {
+        rtkDetected = false;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        features: {
+          terseMode: features.terseMode !== false,
+          poolCompact: features.poolCompact !== false,
+          rtkRewrite: features.rtkRewrite !== false,
+        },
+        rtkDetected,
+      });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  // POST /api/tools/toggle  { feature, enabled } — toggle a feature flag
+  if (pathname === '/api/tools/toggle' && method === 'POST') {
+    withBody(req, res, (body) => {
+      const feature = body.feature;
+      const enabled = !!body.enabled;
+      const validFeatures = ['terseMode', 'poolCompact', 'rtkRewrite'];
+      if (!validFeatures.includes(feature)) {
+        return sendJson(res, 400, { ok: false, error: 'invalid feature' });
+      }
+      try {
+        writeConfig({ features: { [feature]: enabled } });
+        sendJson(res, 200, { ok: true, feature, enabled });
+      } catch (e) {
+        sendJson(res, 500, { ok: false, error: e.message });
+      }
+    });
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
   // Context7 MCP integration — one shared API key, fanned into every station.
   // ---------------------------------------------------------------------------
 

@@ -134,6 +134,7 @@
         <button type="button" data-studio="skills" aria-pressed="true"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Skills</button>
         <button type="button" data-studio="agents" aria-pressed="false"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Sub-agents</button>
         <button type="button" data-studio="mcp" aria-pressed="false"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>MCP</button>
+        <button type="button" data-studio="tools" aria-pressed="false"><svg class="icon sm" aria-hidden="true"><use href="#ic-skills"></use></svg>Tools</button>
       </div>
       <span class="hint" style="margin-left:12px;">Global — applies to every provider/model, no per-provider selection.</span>
     </div>
@@ -200,6 +201,63 @@
         </div>
         <div class="hint" style="margin-top:8px;">Fetches current, version-pinned library/framework docs into every station, so weaker or older-cutoff provider models write code against real docs instead of stale training data. The key is encrypted at rest and never leaves this server.</div>
         <span class="form-msg" id="ctx7Msg"></span>
+      </div>
+    </div>
+
+    <div id="studioToolsPane" hidden>
+      <div class="card" style="padding:12px 14px; margin-bottom:14px;">
+        <div class="hint" style="margin-bottom:10px;"><b>Token-saving features:</b> these optimize costs in the Free-Tier Pool and during headless implement runs by reducing model output or compressing verbose tool output before the model sees it. Each feature is independently optional.</div>
+      </div>
+
+      <div class="card" style="padding:12px 14px; margin-bottom:14px;">
+        <div class="selrow" style="gap:12px; justify-content:space-between;">
+          <div style="flex:1;">
+            <div style="font-weight:600; margin-bottom:4px;">Terse replies</div>
+            <div class="hint">Free-Tier Pool providers answer more concisely, cutting output tokens on every implement/plan/review turn.</div>
+          </div>
+          <button class="toggle" role="switch" data-tool-toggle="terseMode" aria-checked="true"></button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:12px 14px; margin-bottom:14px;">
+        <div class="selrow" style="gap:12px; justify-content:space-between;">
+          <div style="flex:1;">
+            <div style="font-weight:600; margin-bottom:4px;">History compaction</div>
+            <div class="hint">Long conversations get deduplicated and truncated before dispatch (typically 85–95% smaller on long sessions) — the model can still retrieve the original content on demand if it needs it.</div>
+          </div>
+          <button class="toggle" role="switch" data-tool-toggle="poolCompact" aria-checked="true"></button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:12px 14px; margin-bottom:14px;">
+        <div class="selrow" style="gap:12px; justify-content:space-between;">
+          <div style="flex:1;">
+            <div style="font-weight:600; margin-bottom:4px;">RTK command compression</div>
+            <div class="hint">Compresses noisy Bash tool output (git, grep, cargo test, …) before it reaches the model. Only has any effect if you separately install the third-party <span class="cmd mono">rtk</span> CLI — sidewrite never installs it for you.</div>
+          </div>
+          <button class="toggle" role="switch" data-tool-toggle="rtkRewrite" aria-checked="true"></button>
+        </div>
+      </div>
+
+      <div class="card" id="rtkInstallCard" hidden style="padding:12px 14px; margin-bottom:14px; border-left:3px solid var(--accent);">
+        <div style="font-weight:600; margin-bottom:8px; color:var(--accent);">RTK not found on PATH</div>
+        <div class="hint" style="margin-bottom:10px;">The <span class="cmd mono">rtkRewrite</span> toggle above is ready to go, but won't have any effect until you install the <span class="cmd mono">rtk</span> binary. It's fully optional — the feature degrades gracefully if not installed.</div>
+        <div class="hint" style="margin-bottom:8px; font-weight:600;">Install RTK (choose one):</div>
+        <div style="font-family:monospace; font-size:12px; background:var(--bg-sub); padding:8px; border-radius:4px; overflow-x:auto; margin-bottom:8px;">curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh</div>
+        <div style="font-family:monospace; font-size:12px; background:var(--bg-sub); padding:8px; border-radius:4px; overflow-x:auto; margin-bottom:10px;">brew install rtk-ai/tap/rtk</div>
+        <div class="hint">Learn more: <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noopener noreferrer" style="text-decoration:underline;">github.com/rtk-ai/rtk</a></div>
+      </div>
+
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-weight:600; margin-bottom:8px;">Recommended companions</div>
+        <div style="margin-top:8px;">
+          <div style="font-weight:600; margin-bottom:4px;">Ponytail</div>
+          <div class="hint" style="margin-bottom:8px;"><a href="https://github.com/DietrichGebert/ponytail" target="_blank" rel="noopener noreferrer" style="text-decoration:underline;">DietrichGebert/ponytail</a> — a separate Claude Code plugin/skill that reduces how much code the agent writes per task via a YAGNI-first ruleset.</div>
+          <div class="hint" style="margin-bottom:6px; font-weight:600;">Install in Claude Code:</div>
+          <div style="font-family:monospace; font-size:12px; background:var(--bg-sub); padding:8px; border-radius:4px; overflow-x:auto; margin-bottom:6px;">/plugin marketplace add DietrichGebert/ponytail</div>
+          <div style="font-family:monospace; font-size:12px; background:var(--bg-sub); padding:8px; border-radius:4px; overflow-x:auto; margin-bottom:8px;">/plugin install ponytail</div>
+          <div class="hint"><b>Note:</b> Ponytail is entirely separate from sidewrite — installed and controlled entirely within Claude Code itself, not here.</div>
+        </div>
       </div>
     </div>
   </section>
