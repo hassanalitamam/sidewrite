@@ -5,6 +5,12 @@
  * pool-compact — Message history compaction for the Free-Tier Pool.
  *
  * Implements opt-out compaction of long message histories:
+ *   - Only engages once the WHOLE request is actually big enough that
+ *     compaction serves a purpose (see poolCompactMinTokens below) — a short
+ *     conversation that merely happens to contain two identical 1200-char
+ *     `ls` outputs must never lose that content just because it matches the
+ *     per-block dedup/truncate rules; those rules only apply once the
+ *     request as a whole is worth shrinking.
  *   - Deduplicates large identical text/tool_result blocks (>1000 chars)
  *   - Truncates very long blocks (>8000 chars) to head + tail (except last message)
  *   - Never drops or reorders messages, never touches .system
@@ -16,18 +22,60 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { storeOriginal, retrieveOriginal } = require('./pool-compact-cache.cjs');
 
+function readConfigSafe() {
+  try {
+    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || '', '.sidewrite', 'config.json');
+    if (!fs.existsSync(configPath)) return {};
+    return JSON.parse(fs.readFileSync(configPath, 'utf-8')) || {};
+  } catch (err) {
+    return {};
+  }
+}
+
 // Read ~/.sidewrite/config.json; if cfg.features.poolCompact === false, return input unchanged.
 // Missing file/key means enabled (default true).
 function isPoolCompactEnabled() {
-  try {
-    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || '', '.sidewrite', 'config.json');
-    if (!fs.existsSync(configPath)) return true; // enabled by default
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    if (cfg.features && cfg.features.poolCompact === false) return false;
-    return true; // enabled by default
-  } catch (err) {
-    return true; // enabled by default on read error
+  const cfg = readConfigSafe();
+  if (cfg.features && cfg.features.poolCompact === false) return false;
+  return true; // enabled by default
+}
+
+// Default: only start compacting once the WHOLE request is already at ~6000
+// tokens (~24000 chars, assuming ~4 chars/token — the same rough ratio used
+// elsewhere in this codebase for pre-flight estimates). Free-tier models
+// commonly have small context windows (many sit around 8K-32K tokens), and
+// the goal here is the same "compact proactively, well before you actually
+// hit the wall" posture used by Claude Code's own /compact guidance — not
+// "compact any request that happens to contain a duplicated block", which
+// would destructively touch small conversations that never needed it.
+// Configurable via features.poolCompactMinTokens for setups whose registered
+// providers all have larger context windows.
+const DEFAULT_MIN_TRIGGER_TOKENS = 6000;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function minTriggerChars() {
+  const cfg = readConfigSafe();
+  const configured = cfg.features && cfg.features.poolCompactMinTokens;
+  const tokens = (typeof configured === 'number' && configured > 0) ? configured : DEFAULT_MIN_TRIGGER_TOKENS;
+  return tokens * CHARS_PER_TOKEN_ESTIMATE;
+}
+
+// Total character count across every message's content (string or block
+// array) — a cheap, honest proxy for "how big is this request as a whole",
+// independent of any single block's size. Used ONLY to decide whether
+// compaction should engage at all; the per-block rules below are unchanged.
+function estimateTotalChars(messages) {
+  let total = 0;
+  for (const msg of messages) {
+    if (!msg || !msg.content) continue;
+    if (typeof msg.content === 'string') { total += msg.content.length; continue; }
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      const text = extractTextFromBlock(block);
+      total += text ? text.length : 0;
+    }
   }
+  return total;
 }
 
 // Helper: build a stable hash of a string (for deduplication)
@@ -132,6 +180,15 @@ function applyPoolCompact(anthropicReq) {
 
   // Skip if fewer than 6 messages
   if (messages.length < 6) {
+    return anthropicReq;
+  }
+
+  // Skip entirely if the request as a whole isn't big enough to need
+  // compacting yet — this is the gate that keeps an ordinary, small
+  // conversation from ever losing content just because it happens to
+  // contain one duplicated or oversized block. Compaction only kicks in
+  // once the total size actually approaches a real budget concern.
+  if (estimateTotalChars(messages) < minTriggerChars()) {
     return anthropicReq;
   }
 
