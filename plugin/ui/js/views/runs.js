@@ -11,6 +11,8 @@ import {
 import { api } from "../api.js";
 import { pushRunLog } from "../events.js";
 import { toast } from "../components/toast.js";
+import { enterFeedback } from "./feedback.js";
+import { showPage } from "../router.js";
 
 // Total tokens backing a cost block — distinguishes an UNPRICED provider ($0 with
 // real tokens) from a genuinely blank/zero cost. Mirrors history.js's old helper.
@@ -264,6 +266,12 @@ export function renderRunDetail(id) {
         icon("refresh", "sm") + (r.redispatching ? "Redispatching…" : "Re-run") + "</button>"
     : "";
 
+  // Report this (failed run) — send feedback about the failure
+  const reportBtn = (!live && isRedispatchable(r.status))
+    ? '<button type="button" class="btn" id="runReport">' +
+        icon("x", "sm") + "Report this" + "</button>"
+    : "";
+
   root.innerHTML =
     '<button class="back" data-nav="list">' + icon("back", "sm") + "All runs</button>" +
     '<div class="detail-head rise">' +
@@ -272,7 +280,7 @@ export function renderRunDetail(id) {
         (r.provider ? '<span class="sep">·</span>' + esc(r.provider) + (r.model ? " / " + esc(r.model) : "") : "") +
         (r.project ? '<span class="sep">·</span>' + esc(r.project) : "") +
         '<span class="sep">·</span>' + esc(r.status || "running") + "</div></div>" +
-      '<div style="display:flex;align-items:center;gap:10px">' + headBadge + redispatchBtn + "</div>" +
+      '<div style="display:flex;align-items:center;gap:10px">' + headBadge + redispatchBtn + reportBtn + "</div>" +
     "</div>" +
     '<div class="section rise" style="animation-delay:.05s">' +
       '<p class="eyebrow">Pipeline</p>' + laneHTML(r.stage, subs) +
@@ -396,6 +404,12 @@ export function wireRuns() {
   root.addEventListener("click", (e) => {
     const redis = e.target.closest("#runRedispatch");
     if (redis && state.focusRunId) redispatchRun(state.focusRunId);
+
+    const report = e.target.closest("#runReport");
+    if (report && state.focusRunId) {
+      enterFeedback({ runId: state.focusRunId });
+      showPage("feedback");
+    }
   });
 
   // 'toggle' doesn't bubble — capture on the root. Lazy-load on first open and

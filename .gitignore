@@ -5,3 +5,28 @@ npm-debug.log*
 CLAUDE.md
 # sidewrite runtime data lives in ~/.sidewrite and ~/.claude-providers (never in-repo)
 sidewrite-docs/
+
+# admin dashboard: separate project, own local git history (no remote), not tracked here
+admin-dashboard/
+
+# local Claude Code / agent tooling state — not part of the repo
+.agents/
+.claude/
+.github/
+
+# temp workflow-script copy used to resume a background implementation run
+.scratch-workflow-parallel.js
+
+# MCP server config — local machine wiring, not for the repo
+.mcp.json
+
+# Supabase schema/migrations — kept local only, not tracked here
+db/
+
+# stray error/log dumps
+err.txt
+error.txt
+*.error.txt
+
+# skill lockfile — local tooling state, not tracked here
+skills-lock.json

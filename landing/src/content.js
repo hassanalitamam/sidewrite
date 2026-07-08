@@ -16,7 +16,7 @@ export const AUTHOR = {
 // with package.json / plugin.json / marketplace.json (scripts/sync-version.cjs
 // bumps those three; this one is landing-only copy and isn't touched by it,
 // so it must be updated by hand on release).
-export const CURRENT_VERSION = "v0.2.0";
+export const CURRENT_VERSION = "v0.3.0";
 
 export const TAGLINE_OPTIONS = [
   "Any model. Your rules.",
@@ -34,15 +34,15 @@ export const HERO = {
 export const STATS = [
   { value: "17", label: "providers · 256 models bundled" },
   { value: "0", label: "external dependencies" },
-  // Grounded in plugin/data/pool-providers.json — 10 pooled free-tier
-  // providers, 209 models total, no card required for any of them.
+  // Grounded in plugin/data/pool-providers.json — 9 pooled free-tier
+  // providers, 197 models total, no card required for any of them.
   // Deliberately NOT a tokens/day or requests/day figure: every provider
   // publishes its own limits differently (some per-model RPD/TPD, some
   // account-wide RPM only, some a neuron budget, some nothing at all), so
   // any single combined throughput number needs estimation to fill the
   // gaps — and estimates drift as providers change limits without notice.
   // A plain provider/model count needs no such guesswork.
-  { value: "10", label: "free-tier providers · 209 models, no card" },
+  { value: "9", label: "free-tier providers · 197 models, no card" },
   { value: "127.0.0.1", label: "local-only dashboard" },
 ];
 
@@ -134,7 +134,14 @@ export const FEATURES = [
     wide: true,
     diagram: true,
     body:
-      "One local gateway (POST /v1/messages, standard Anthropic wire) fronts all 10 providers — point any Claude-Code-compatible client at it and it rotates across every pooled key transparently, with tier-aware fallback so a sonnet request exhausts every sonnet-tier candidate before ever dropping to haiku. A cooling-down candidate isn't dead weight: its rpm/rpd/tpm/tpd budget refills continuously, so it rejoins rotation the moment it has room again — no manual reset. Sticky sessions keep the same provider for a conversation, and a context-handoff note covers you on a forced swap. Every candidate is proactively budget-checked before dispatch, not just retried after a 429. Mistral alone publishes a 1,000,000,000-token/month free quota across its \"Experiment\" tier models — one of ten pools this deep. Keys are stored AES-256-GCM encrypted, never returned by any read API.",
+      "One local gateway (POST /v1/messages, standard Anthropic wire) fronts all 9 providers — point any Claude-Code-compatible client at it and it rotates across every pooled key transparently, with tier-aware fallback so a sonnet request exhausts every sonnet-tier candidate before ever dropping to haiku. A cooling-down candidate isn't dead weight: its rpm/rpd/tpm/tpd budget refills continuously, so it rejoins rotation the moment it has room again — no manual reset. Sticky sessions keep the same provider for a conversation, and a context-handoff note covers you on a forced swap. Every candidate is proactively budget-checked before dispatch, not just retried after a 429. Mistral alone publishes a 1,000,000,000-token/month free quota across its \"Experiment\" tier models — one of nine pools this deep. Keys are stored AES-256-GCM encrypted, never returned by any read API.",
+  },
+  {
+    kicker: "TOKEN SAVINGS",
+    title: "Terse mode, compaction, RTK",
+    wide: true,
+    body:
+      "Three opt-out toggles, all controllable live from Studio → Tools: terse replies trim output tokens on every pooled request; history compaction deduplicates and truncates a conversation before dispatch — but only once it's actually large (100,000+ tokens), and never for good — omitted content is cached locally and the model can pull it back with a pool_retrieve tool, capped at a few rounds so it can't loop forever; and an optional hook compresses noisy Bash output (git, grep, cargo test, …) if you've separately installed the third-party rtk CLI — sidewrite never installs it for you, and it's a silent no-op if it's missing.",
   },
 ];
 
@@ -172,7 +179,7 @@ export const COMPARISONS = [
   },
   {
     name: "a single free API key",
-    text: "One free provider means you're stuck the moment you hit its rate limit. The Free-Tier Pool rotates across 10 providers, exhausting every same-tier candidate before ever dropping a sonnet request to haiku, keeps you on the same provider all conversation via sticky sessions (with a context-handoff note if it has to swap), and checks each candidate's rpm/rpd/tpm/tpd budget before dispatch — not after a 429.",
+    text: "One free provider means you're stuck the moment you hit its rate limit. The Free-Tier Pool rotates across 9 providers, exhausting every same-tier candidate before ever dropping a sonnet request to haiku, keeps you on the same provider all conversation via sticky sessions (with a context-handoff note if it has to swap), and checks each candidate's rpm/rpd/tpm/tpd budget before dispatch — not after a 429.",
   },
 ];
 
@@ -213,7 +220,7 @@ export const FAQ = [
   },
   {
     q: "Can I use Sidewrite for free with no API key?",
-    a: "Yes — the Free-Tier Pool rotates across 10 free-tier providers (Z.ai/GLM, Groq, Cerebras, GitHub Models, OpenRouter free models, SambaNova, Cloudflare Workers AI, NVIDIA NIM, Google Gemini, Mistral) with no key of your own required. It exhausts every same-tier candidate before dropping a sonnet request to haiku, checks each candidate's rpm/rpd/tpm/tpd budget before dispatch, and keeps you on the same provider all conversation via sticky sessions.",
+    a: "Yes — the Free-Tier Pool rotates across 9 free-tier providers (Z.ai/GLM, Cerebras, GitHub Models, OpenRouter free models, SambaNova, Cloudflare Workers AI, NVIDIA NIM, Google Gemini, Mistral) with no key of your own required. It exhausts every same-tier candidate before dropping a sonnet request to haiku, checks each candidate's rpm/rpd/tpm/tpd budget before dispatch, and keeps you on the same provider all conversation via sticky sessions.",
   },
   {
     q: "Does WebSearch work on a third-party model?",
@@ -282,10 +289,108 @@ export const DOCS_COMMANDS = [
 // Entry `parts` follow the RichText mini-format (see components/RichText.jsx).
 export const CHANGELOG = [
   {
-    version: "v0.2.0",
-    date: "2026-07-06",
+    version: "v0.3.0",
+    date: "2026-07-07",
     latest: true,
     accent: true,
+    beta: true,
+    entries: [
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Free-Tier Pool count corrected to 9 providers / 197 models." },
+          " Groq was dropped from the pool (every free-tier model capped at a 6,000–30,000 TPM ceiling, and its one high-budget model rejected tool-calling outright), but the site's stats, feature copy, and comparisons still quoted the old 10-provider / 209-model figures. All of them now match ",
+          { code: "plugin/data/pool-providers.json" },
+          ".",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "GitHub icon in the dashboard header." },
+          " A one-click link to the repo sits next to the theme toggle in the local dashboard's topbar.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          "Repo discoverability: GitHub topics (",
+          { code: "claude-code" },
+          ", ",
+          { code: "cli" },
+          ", ",
+          { code: "llm" },
+          ", and more) and a homepage link to the live site added to the repo's About panel.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "README rewritten." },
+          " Trimmed to install, quick start, modes, the Free-Tier Pool, providers, commands, and safety — dropped the long-form rationale section for a page that's quicker to scan.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Terse mode." },
+          " An opt-out toggle prepends a short, terse-reply instruction to every Free-Tier Pool request, cutting output tokens. Adapted from the MIT-licensed ",
+          { code: "caveman" },
+          " project's instruction text.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "History compaction with Compress-Cache-Retrieve." },
+          " Long conversations get deduplicated and truncated before dispatch, but only once a request is already big (default ~100,000 tokens) — a short exchange that merely repeats a small tool output is never touched. Nothing omitted is lost for good: it's cached locally and the model can pull it back on demand via a ",
+          { code: "pool_retrieve" },
+          " tool, capped at 3 retrieval rounds so a looping model can't ask forever.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Optional RTK command compression." },
+          " A PreToolUse hook shells out to the third-party ",
+          { code: "rtk" },
+          " CLI, if installed, to compress noisy Bash output before it reaches the model. Sidewrite never installs it for you and the hook is a silent no-op when it's absent.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Studio → Tools dashboard tab." },
+          " Toggle all three token-saving features live, see an install prompt when RTK isn't detected, view and clear the compaction retrieval cache, and find a link to the separate, recommended ",
+          { code: "Ponytail" },
+          " Claude Code plugin.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "v0.2.1",
+    date: "2026-07-06",
+    entries: [
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Cross-provider session history invisible to --resume." },
+          " Other providers' transcripts were mirrored in with symlinks, but Claude Code's own session lister checks the raw on-disk type and never follows a link, so they silently never showed up in --resume. Switched to hard links (same inode, stays in sync, and passes the check) and self-repairs any leftover symlinks from the old code on next launch.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Remote-config endpoint live." },
+          " The force-update gate's version floor / kill switch now reads from a real hosted endpoint instead of failing open on an unconfigured host.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "v0.2.0",
+    date: "2026-07-06",
     entries: [
       {
         tag: "NEW",

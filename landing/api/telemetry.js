@@ -31,6 +31,7 @@
 
 import { randomUUID } from 'node:crypto';
 import https from 'node:https';
+import { createClient } from '@supabase/supabase-js';
 
 const MAX_BODY_BYTES = 32 * 1024; // a single scrubbed event is tiny; reject anything larger
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -285,6 +286,58 @@ function sendToSentry(record) {
   });
 }
 
+// Lazy-initialized Supabase client for telemetry event persistence.
+let supabaseClient = null;
+
+function getSupabaseClient() {
+  if (!supabaseClient && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    supabaseClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+  }
+  return supabaseClient;
+}
+
+// Persist event to Supabase telemetry_events table. Independent of blob storage —
+// failures here must never affect the client response or the blob/webhook/sentry flow.
+async function persistToSupabase(record) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  try {
+    // Prepare payload, truncating if necessary to satisfy the pg_column_size check.
+    let payload = record;
+    const payloadStr = JSON.stringify(record);
+    if (payloadStr.length > 35000) {
+      // Payload too large; keep only scalar fields to stay under the 40000-byte limit.
+      payload = {
+        kind: record.kind,
+        code: record.code,
+        provider: record.provider,
+        model: record.model,
+        install_id: record.install_id,
+        version: record.version,
+      };
+    }
+
+    const row = {
+      kind: record.kind,
+      code: record.code || null,
+      provider: record.provider || null,
+      model: record.model || null,
+      install_id: record.install_id || null,
+      version: record.version || null,
+      payload: payload,
+    };
+
+    // Insert without .select() to avoid RLS policy violations (anon has no SELECT permission).
+    const result = await supabase.from('telemetry_events').insert(row);
+    if (result.error) {
+      console.log('[telemetry-supabase-error]', result.error.message);
+    }
+  } catch (e) {
+    console.log('[telemetry-supabase-error]', e && e.message ? e.message : String(e));
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -325,6 +378,12 @@ export default async function handler(req, res) {
   } catch (_) {
     // Never surface a storage failure as a 5xx — the CLI's flush() would just
     // retry with backoff, wasting the user's bandwidth on our own error.
+  }
+
+  try {
+    await persistToSupabase(record);
+  } catch (_) {
+    // same: Supabase being down/misconfigured must never affect the client
   }
 
   try {

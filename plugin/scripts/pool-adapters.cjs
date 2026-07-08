@@ -70,40 +70,53 @@ function anthropicMessagesToOpenAI(messages) {
     const toolUses = content.filter((b) => b && b.type === 'tool_use');
     const parts = content.filter((b) => b && (b.type === 'text' || b.type === 'image'));
 
-    if (parts.length) {
-      const oaiParts = parts.map((b) => {
-        if (b.type === 'text') return { type: 'text', text: b.text || '' };
-        // Anthropic image block: {type:'image', source:{type:'base64', media_type, data}}
-        const src = b.source || {};
-        const url = src.type === 'base64'
-          ? 'data:' + (src.media_type || 'image/png') + ';base64,' + src.data
-          : (src.url || '');
-        return { type: 'image_url', image_url: { url } };
-      });
-      out.push({
-        role: m.role,
-        content: oaiParts.length === 1 && oaiParts[0].type === 'text' ? oaiParts[0].text : oaiParts,
-      });
-    }
-
-    if (toolUses.length) {
-      out.push({
-        role: 'assistant',
-        content: null,
-        tool_calls: toolUses.map((tu) => ({
-          id: tu.id,
-          type: 'function',
-          function: { name: tu.name, arguments: JSON.stringify(tu.input || {}) },
-        })),
-      });
-    }
-
+    // A tool-result message MUST come immediately after the assistant
+    // message with the matching tool_calls — the OpenAI/Mistral spec rejects
+    // any other role in between ("Unexpected role 'tool' after role 'user'").
+    // An Anthropic "user" turn commonly carries a tool_result block AND
+    // extra user text in the SAME content array (Claude Code routinely
+    // injects a <system-reminder> text block alongside a tool_result) — so
+    // the tool-role message(s) for this turn must be emitted BEFORE any
+    // combined text message from the same array, not after.
     for (const tr of toolResults) {
       out.push({
         role: 'tool',
         tool_call_id: tr.tool_use_id,
         content: flattenContentToText(tr.content) || (typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content || '')),
       });
+    }
+
+    // An Anthropic assistant turn commonly carries BOTH a text block and a
+    // tool_use block in the same content array (e.g. "I'll edit this file" +
+    // the edit call) — the OpenAI spec models that as ONE message with both
+    // `content` and `tool_calls` set, not two separate messages. Splitting it
+    // changes the exact prompt bytes replayed every subsequent turn (extra
+    // role boundaries in a long history), which can defeat prefix/KV-cache
+    // reuse on the serving side for large agentic conversations.
+    if (parts.length || toolUses.length) {
+      const message = { role: m.role };
+      if (parts.length) {
+        const oaiParts = parts.map((b) => {
+          if (b.type === 'text') return { type: 'text', text: b.text || '' };
+          // Anthropic image block: {type:'image', source:{type:'base64', media_type, data}}
+          const src = b.source || {};
+          const url = src.type === 'base64'
+            ? 'data:' + (src.media_type || 'image/png') + ';base64,' + src.data
+            : (src.url || '');
+          return { type: 'image_url', image_url: { url } };
+        });
+        message.content = oaiParts.length === 1 && oaiParts[0].type === 'text' ? oaiParts[0].text : oaiParts;
+      } else if (toolUses.length) {
+        message.content = null;
+      }
+      if (toolUses.length) {
+        message.tool_calls = toolUses.map((tu) => ({
+          id: tu.id,
+          type: 'function',
+          function: { name: tu.name, arguments: JSON.stringify(tu.input || {}) },
+        }));
+      }
+      out.push(message);
     }
   }
   return out;
@@ -148,11 +161,6 @@ function anthropicRequestToOpenAI(anthropicReq, model) {
     max_tokens: anthropicReq.max_tokens || 1024,
     stream: !!anthropicReq.stream,
   };
-  // Groq's API marks `max_tokens` deprecated in favor of `max_completion_tokens`;
-  // send both — Cerebras and the wider OpenAI spec accept both names, so this
-  // is free forward-compatibility with no cost to the providers that only know
-  // the older name.
-  body.max_completion_tokens = body.max_tokens;
   if (body.stream) body.stream_options = { include_usage: true };
   if (anthropicReq.temperature !== undefined) body.temperature = anthropicReq.temperature;
   if (anthropicReq.top_p !== undefined) body.top_p = anthropicReq.top_p;
@@ -381,6 +389,28 @@ class AnthropicStreamEncoder {
   }
 }
 
+// Guards each individual reader.read() against a stalled-but-still-open
+// upstream connection. fetchWithTimeout's AbortController (pool-router.cjs)
+// only covers the CONNECT+HEADERS phase — its timer is cleared the moment
+// fetch() resolves — so once a streaming response commits (headers sent,
+// res.writeHead() already fired), a provider that goes silent mid-generation
+// without closing the connection would otherwise hang reader.read() forever,
+// leaving the client's spinner stuck with no error and no output (confirmed
+// live: a Groq reasoning-model candidate idling mid-stream). Any single gap
+// this long between chunks is treated as a stall, not a slow-but-alive
+// stream — real SSE token/keep-alive traffic is far more frequent.
+const STREAM_IDLE_TIMEOUT_MS = 25_000;
+
+function readWithIdleTimeout(reader, idleMs = STREAM_IDLE_TIMEOUT_MS) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(new Error('upstream stream stalled: no data for ' + idleMs + 'ms'), { poolReason: 'timeout' }));
+    }, idleMs);
+  });
+  return Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer));
+}
+
 // Drives a real fetch() streaming response from an OpenAI-compatible upstream
 // through the encoder above, invoking `onChunk(sseString)` as soon as each
 // translated event is ready — true incremental pass-through, no buffering
@@ -395,7 +425,7 @@ async function streamOpenAIToAnthropic(upstreamResponse, requestedModel, onChunk
   let startedMessage = false;
 
   while (true) {
-    const { value, done } = await reader.read();
+    const { value, done } = await readWithIdleTimeout(reader);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let boundary;
@@ -453,9 +483,10 @@ const GEMINI_FINISH_TO_ANTHROPIC = {
 // causes a 400 INVALID_ARGUMENT for the ENTIRE request. Strip them recursively.
 const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
   '$schema', '$id', '$ref', '$defs', 'definitions',
-  'additionalProperties', 'unevaluatedProperties', 'patternProperties',
+  'additionalProperties', 'unevaluatedProperties', 'patternProperties', 'propertyNames',
   'contentEncoding', 'contentMediaType', 'examples', 'const',
   'if', 'then', 'else', 'not',
+  'exclusiveMinimum', 'exclusiveMaximum',
 ]);
 
 function sanitizeGeminiSchema(schema) {
@@ -707,7 +738,7 @@ async function streamGeminiToAnthropic(upstreamResponse, requestedModel, onChunk
   const decoder = new TextDecoder();
   let buf = ''; let usage = null; let startedMessage = false;
   while (true) {
-    const { value, done } = await reader.read();
+    const { value, done } = await readWithIdleTimeout(reader);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let boundary;
@@ -771,4 +802,5 @@ module.exports = {
   anthropicMessageToSyntheticSSE,
   streamOpenAIToAnthropic,
   streamGeminiToAnthropic,
+  readWithIdleTimeout,
 };

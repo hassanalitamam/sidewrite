@@ -10,35 +10,60 @@
 // slow, down, or returning garbage never blocks a run — it can only ever make
 // the CLI request an update or refuse to proceed, never crash it.
 //
-// Values are read from env vars (set in the Vercel project settings) so a
-// forced update or kill switch can be flipped without a code change or
-// redeploy — just edit the env var and it's live within REMOTE_CONFIG_MAX_AGE
-// seconds. Defaults are the safe no-op values: no forced version, no kill
-// switch, so standing this endpoint up does nothing until deliberately set.
+// Values are read from the Supabase version_config_public view (which anon
+// can SELECT) so a forced update or kill switch can be managed without
+// redeploying this function — just update the database row and it's live
+// within REMOTE_CONFIG_MAX_AGE seconds. Defaults are the safe no-op values:
+// no forced version, no kill switch.
+
+import { createClient } from '@supabase/supabase-js';
 
 const MAX_AGE_SECONDS = 60;
 
-function readMinVersion() {
-  const v = process.env.REMOTE_CONFIG_MIN_VERSION;
-  return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v.trim()) ? v.trim() : null;
-}
-
-function readKillSwitch() {
-  return process.env.REMOTE_CONFIG_KILL_SWITCH === 'true';
-}
-
-export default function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== 'GET') {
     res.status(405).json({ ok: false, error: 'GET only' });
     return;
   }
 
-  const body = {
-    flags: {},
-    minVersion: readMinVersion(),
-    killSwitch: readKillSwitch(),
-  };
+  try {
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
 
-  res.setHeader('Cache-Control', `public, max-age=${MAX_AGE_SECONDS}`);
-  res.status(200).json(body);
+    const { data, error } = await supabase
+      .from('version_config_public')
+      .select('current_version, min_version, kill_switch, flags')
+      .single();
+
+    let body;
+
+    if (error || !data) {
+      // Fail gracefully: return safe defaults if query fails
+      body = {
+        flags: {},
+        minVersion: null,
+        killSwitch: false,
+      };
+    } else {
+      body = {
+        flags: data.flags || {},
+        minVersion: data.min_version || null,
+        killSwitch: Boolean(data.kill_switch),
+      };
+    }
+
+    res.setHeader('Cache-Control', `public, max-age=${MAX_AGE_SECONDS}`);
+    res.status(200).json(body);
+  } catch (err) {
+    // Fail gracefully: any exception returns safe defaults
+    const body = {
+      flags: {},
+      minVersion: null,
+      killSwitch: false,
+    };
+    res.setHeader('Cache-Control', `public, max-age=${MAX_AGE_SECONDS}`);
+    res.status(200).json(body);
+  }
 }

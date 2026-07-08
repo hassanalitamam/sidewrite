@@ -98,6 +98,17 @@ const WINDOW_MS = {
 // tradeoff pool-router already accepts for its own cooldowns map.
 const ledgers = new Map(); // id -> { rpm: number[], rpd: number[], tpm: Bucket|null, tpd: Bucket|null }
 
+// Real (not projected) total tokens consumed today across EVERY candidate,
+// for the dashboard's "tokens used today" stat. Calendar-day reset (unlike
+// the rolling 24h tpd window above) since that's what "today" means to a
+// human reading the number — in-memory only, same posture as `ledgers`.
+let tokensToday = { day: new Date().toDateString(), tokens: 0 };
+function tokensUsedToday() {
+  const day = new Date().toDateString();
+  if (day !== tokensToday.day) tokensToday = { day, tokens: 0 };
+  return tokensToday.tokens;
+}
+
 function newBucket(capacity, now) {
   // Starts FULL — an untouched candidate should be immediately usable up to
   // its whole declared budget, not have to "warm up" from empty.
@@ -214,6 +225,41 @@ function admit(candidate, estimatedTokens) {
   return true;
 }
 
+// Diagnostic twin of admit() — same checks, but returns WHY instead of just
+// true/false. Used only when orderedCandidates() comes back empty, to turn
+// an opaque "No candidate available" 503 into an actionable log line: was
+// this key excluded by rpm/rpd/tpm/tpd headroom, or does the estimate simply
+// exceed its bucket's own MAX capacity (which no amount of waiting fixes —
+// a bucket never holds more than its declared limit, so a single request
+// bigger than every configured candidate's tpm ceiling can never be admitted
+// by ANY of them, ever, for as long as the conversation stays that size).
+function explainAdmit(candidate, estimatedTokens) {
+  const limits = candidate.limits || {};
+  const now = Date.now();
+  const ledger = getLedger(candidate.id);
+  if (limits.rpm) {
+    pruneWindow(ledger.rpm, now, WINDOW_MS.rpm);
+    if (ledger.rpm.length >= limits.rpm) return 'rpm exhausted (' + ledger.rpm.length + '/' + limits.rpm + ')';
+  }
+  if (limits.rpd) {
+    pruneWindow(ledger.rpd, now, WINDOW_MS.rpd);
+    if (ledger.rpd.length >= limits.rpd) return 'rpd exhausted (' + ledger.rpd.length + '/' + limits.rpd + ')';
+  }
+  if (limits.tpm) {
+    const bucket = getBucket(ledger, 'tpm', limits.tpm, now);
+    refill(bucket, limits.tpm, WINDOW_MS.tpm, now);
+    if (bucket.tokens < estimatedTokens) {
+      return 'tpm insufficient (need ' + estimatedTokens + ', have ' + Math.floor(bucket.tokens) + '/' + limits.tpm + ')' + (estimatedTokens > limits.tpm ? ' — request EXCEEDS this key\'s own cap, can never fit' : '');
+    }
+  }
+  if (limits.tpd) {
+    const bucket = getBucket(ledger, 'tpd', limits.tpd, now);
+    refill(bucket, limits.tpd, WINDOW_MS.tpd, now);
+    if (bucket.tokens < estimatedTokens) return 'tpd insufficient (need ' + estimatedTokens + ', have ' + Math.floor(bucket.tokens) + '/' + limits.tpd + ')';
+  }
+  return 'ok';
+}
+
 // The actual spend, for the ONE candidate the router is committing to
 // dispatch to right now. Always call this only after an admit() check
 // selected this candidate — skipping straight to reserve() would spend
@@ -245,6 +291,10 @@ function record(candidate, estimatedTokens, actualTokens) {
   const now = Date.now();
   const ledger = getLedger(candidate.id);
   const delta = estimatedTokens - actualTokens; // refund estimate, debit actual
+
+  const day = new Date().toDateString();
+  if (day !== tokensToday.day) tokensToday = { day, tokens: 0 };
+  tokensToday.tokens += actualTokens;
 
   if (limits.tpm) {
     const bucket = getBucket(ledger, 'tpm', limits.tpm, now);
@@ -310,11 +360,13 @@ function usageSnapshot(candidate) {
 
 module.exports = {
   admit,
+  explainAdmit,
   reserve,
   record,
   release,
   estimateRequestTokens,
   usageSnapshot,
+  tokensUsedToday,
   // exported for the dashboard's live-usage view / debugging, same pattern
   // pool-router.cjs already uses for _debugCooldowns.
   _debugLedgers: ledgers,

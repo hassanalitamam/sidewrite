@@ -90,6 +90,7 @@ button { font:inherit; color:inherit; cursor:pointer; background:none; border:no
   fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round;
 }
 .icon.sm { width:15px; height:15px; }
+.icon-fill { fill:currentColor; stroke:none; }
 
 /* ---------- keyframes (motion budget) ---------- */
 @keyframes sw-rise  { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
@@ -773,6 +774,15 @@ input.tf.mono { font-family:var(--mono); font-size:12.5px; }
 /* ---------- health ---------- */
 #healthRoot { display:block; }
 #healthRoot .card + .card { margin-top:0; }
+
+/* ---------- feedback fab ---------- */
+.fab {
+  position:fixed; bottom:24px; right:24px; width:48px; height:48px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--border-obj); background:var(--accent); color:#fff;
+  z-index:30; box-shadow:var(--shadow-pop); transition:background .15s, border-color .15s;
+}
+.fab:hover { background:var(--accent-hi); }
 
 /* ---------- RTL / Arabic (dir="rtl" on <html>, toggled by #dirBtn) ----------
    Flexbox/grid already mirror under dir:rtl; these override the prototype's few

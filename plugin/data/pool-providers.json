@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "note": "Hand-maintained catalog of the best 10 free-tier-eligible providers for the Free-Tier Pool track. This is metadata only — no keys live here. `wire` selects which pool-adapters.cjs adapter handles the family; `baseUrl` is an editable prefill for the add-key form (same 'catalog fills it in, user can override' pattern as the existing Providers catalog tab); `tosRisk` surfaces each provider's own terms-of-service posture for personal/single-user proxy use (informational, not legal advice — see plugin/scripts/pool-router.cjs header). `typicalLimits` is a short human-readable summary. `models` is an EXHAUSTIVE researched (2026-07-05) per-model breakdown — every free-tier text-generation/chat-completion model each provider offers (audio/TTS, embeddings, image-gen, and moderation-only models excluded as unusable for a Claude Code chat backend), not a trimmed sample — context window in tokens, and whichever of RPM/RPD/TPM/TPD the provider actually publishes for its free tier (null, not guessed, for anything unconfirmed) — cross-checked between github.com/cheahjs/free-llm-api-resources and each provider's own official docs, official docs preferred on conflict. Shown in the add-key form (prefills Base URL, model datalist, and the advanced context/limit fields) and in the 'browse all models' reference table; never auto-applied without the user seeing it first. DeepSeek and OVH were dropped from the prior 12-provider list: DeepSeek's own API turned out to have no free tier at all (pay-per-token only, confirmed via official docs), and OVH's 2 RPM/no-context-data offering was the weakest of the set — Cloudflare Workers AI was promoted in to keep a genuine top 10. Cohere is deliberately absent: its terms explicitly forbid personal/household use.",
+  "version": 6,
+  "note": "Hand-maintained catalog of the best free-tier-eligible providers for the Free-Tier Pool track. This is metadata only — no keys live here. `wire` selects which pool-adapters.cjs adapter handles the family; `baseUrl` is an editable prefill for the add-key form (same 'catalog fills it in, user can override' pattern as the existing Providers catalog tab); `tosRisk` surfaces each provider's own terms-of-service posture for personal/single-user proxy use (informational, not legal advice — see plugin/scripts/pool-router.cjs header). `typicalLimits` is a short human-readable summary. `models` is an EXHAUSTIVE researched (2026-07-05) per-model breakdown — every free-tier text-generation/chat-completion model each provider offers (audio/TTS, embeddings, image-gen, and moderation-only models excluded as unusable for a Claude Code chat backend), not a trimmed sample — context window in tokens, and whichever of RPM/RPD/TPM/TPD the provider actually publishes for its free tier (null, not guessed, for anything unconfirmed) — cross-checked between github.com/cheahjs/free-llm-api-resources and each provider's own official docs, official docs preferred on conflict. Shown in the add-key form (prefills Base URL, model datalist, and the advanced context/limit fields) and in the 'browse all models' reference table; never auto-applied without the user seeing it first. DeepSeek and OVH were dropped from the prior 12-provider list: DeepSeek's own API turned out to have no free tier at all (pay-per-token only, confirmed via official docs), and OVH's 2 RPM/no-context-data offering was the weakest of the set — Cloudflare Workers AI was promoted in to keep a genuine top 10. Groq was removed afterward: every model on its free tier declares a TPM (tokens-per-minute) ceiling of 6,000-30,000, and its one high-budget model (groq/compound, 70,000 TPM) turned out to flatly reject tool-calling requests (HTTP 400 \"tool calling is not supported with this model\") — confirmed live — making the whole provider unusable for an agentic tool-calling client like Claude Code, which sends a tools array on every request. Cohere is deliberately absent: its terms explicitly forbid personal/household use. Updated 2026-07-07: verified current model specs via live web research and marked each provider's single strongest free model with flagship:true + flagshipNote (context windows corrected where stale — notably GLM-5.2 on NVIDIA NIM and Cloudflare Workers AI, previously stuck at an 8192/null placeholder, is actually a 1,000,000-token frontier model). See top-level topPick for the single strongest model across the whole catalog.",
   "providers": [
     {
       "id": "zai-glm",
@@ -14,139 +14,22 @@
         {
           "id": "glm-4.7-flash",
           "name": "GLM-4.7-Flash",
-          "context": null,
+          "context": 131072,
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "Newest of Z.ai's 2 free Flash models — the stronger pick of the two."
         },
         {
           "id": "glm-4.5-flash",
           "name": "GLM-4.5-Flash",
-          "context": null,
+          "context": 131072,
           "rpm": null,
           "rpd": null,
           "tpm": null,
           "tpd": null
-        }
-      ]
-    },
-    {
-      "id": "groq",
-      "name": "Groq",
-      "wire": "openai",
-      "baseUrl": "https://api.groq.com/openai/v1",
-      "tosRisk": "ok",
-      "docsUrl": "https://console.groq.com/docs/rate-limits",
-      "typicalLimits": "12 free models — ~30 RPM (60 for Qwen3 32B), RPD 100–14,400, TPM 1.2K–70K",
-      "models": [
-        {
-          "id": "llama-3.1-8b-instant",
-          "name": "Llama 3.1 8B Instant",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 14400,
-          "tpm": 6000,
-          "tpd": 500000
-        },
-        {
-          "id": "llama-3.3-70b-versatile",
-          "name": "Llama 3.3 70B Versatile",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 1000,
-          "tpm": 12000,
-          "tpd": 100000
-        },
-        {
-          "id": "openai/gpt-oss-120b",
-          "name": "GPT-OSS 120B",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 1000,
-          "tpm": 8000,
-          "tpd": 200000
-        },
-        {
-          "id": "openai/gpt-oss-20b",
-          "name": "GPT-OSS 20B",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 1000,
-          "tpm": 8000,
-          "tpd": 200000
-        },
-        {
-          "id": "groq/compound",
-          "name": "Groq Compound",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 250,
-          "tpm": 70000,
-          "tpd": null
-        },
-        {
-          "id": "groq/compound-mini",
-          "name": "Groq Compound Mini",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 250,
-          "tpm": 70000,
-          "tpd": null
-        },
-        {
-          "id": "canopylabs/orpheus-arabic-saudi",
-          "name": "Orpheus Arabic (Saudi)",
-          "context": 4000,
-          "rpm": 10,
-          "rpd": 100,
-          "tpm": 1200,
-          "tpd": 3600
-        },
-        {
-          "id": "canopylabs/orpheus-v1-english",
-          "name": "Orpheus v1 English",
-          "context": 4000,
-          "rpm": 10,
-          "rpd": 100,
-          "tpm": 1200,
-          "tpd": 3600
-        },
-        {
-          "id": "meta-llama/llama-4-scout-17b-16e-instruct",
-          "name": "Llama 4 Scout 17B Instruct",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 1000,
-          "tpm": 30000,
-          "tpd": 500000
-        },
-        {
-          "id": "qwen/qwen3-32b",
-          "name": "Qwen 3 32B",
-          "context": 131072,
-          "rpm": 60,
-          "rpd": 1000,
-          "tpm": 6000,
-          "tpd": 500000
-        },
-        {
-          "id": "qwen/qwen3.6-27b",
-          "name": "Qwen 3.6 27B",
-          "context": 131072,
-          "rpm": 30,
-          "rpd": 1000,
-          "tpm": 8000,
-          "tpd": 200000
-        },
-        {
-          "id": "allam-2-7b",
-          "name": "Allam 2 7B",
-          "context": null,
-          "rpm": 30,
-          "rpd": 7000,
-          "tpm": 6000,
-          "tpd": 500000
         }
       ]
     },
@@ -184,7 +67,9 @@
           "rpm": 5,
           "rpd": null,
           "tpm": 30000,
-          "tpd": 1000000
+          "tpd": 1000000,
+          "flagship": true,
+          "flagshipNote": "Full GLM-4.7 (not the Flash cut) — the most capable of Cerebras's 3 free models."
         }
       ]
     },
@@ -250,7 +135,9 @@
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "OpenAI's current flagship chat model — the strongest of GitHub Models' 35 free options."
         },
         {
           "id": "openai/gpt-5-chat",
@@ -684,7 +571,9 @@
           "rpm": 20,
           "rpd": 50,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "Qwen3-Coder-480B-A35B — top-tier open-weight coding model, strongest of the 19 free options."
         },
         {
           "id": "qwen/qwen3-next-80b-a3b-instruct:free",
@@ -709,11 +598,13 @@
         {
           "id": "MiniMax-M2.7",
           "name": "MiniMax M2.7",
-          "context": 192000,
+          "context": 204800,
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "tosRisk": "caution",
+          "tosNote": "Confirmed live 2026-07-07: SambaNova returns HTTP 402 'A payment method is required to use MiniMax-M2.7' even under the trial-credit free tier — not usable without adding billing at cloud.sambanova.ai/plans/billing."
         },
         {
           "id": "DeepSeek-V3.1",
@@ -722,7 +613,9 @@
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "SambaNova's best confirmed-free model — MiniMax M2.7 has a higher Intelligence Index but requires a payment method on file even on the trial tier."
         },
         {
           "id": "Meta-Llama-3.3-70B-Instruct",
@@ -745,7 +638,7 @@
         {
           "id": "DeepSeek-V3.2",
           "name": "DeepSeek V3.2",
-          "context": 32000,
+          "context": 131072,
           "rpm": null,
           "rpd": null,
           "tpm": null,
@@ -811,11 +704,13 @@
         {
           "id": "@cf/glm-5.2",
           "name": "GLM-5.2",
-          "context": null,
+          "context": 1000000,
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "GLM-5.2 — Z.ai's frontier open-weight flagship (beats GPT-5.5 on several long-horizon coding benchmarks); the single strongest model in this whole catalog."
         },
         {
           "id": "@cf/kimi-k2.6",
@@ -1462,7 +1357,7 @@
         {
           "id": "moonshotai/kimi-k2-instruct",
           "name": "Kimi K2 Instruct",
-          "context": 128000,
+          "context": 262144,
           "rpm": 40,
           "rpd": null,
           "tpm": null,
@@ -1471,7 +1366,7 @@
         {
           "id": "moonshotai/kimi-k2-thinking",
           "name": "Kimi K2 Thinking",
-          "context": 128000,
+          "context": 262144,
           "rpm": 40,
           "rpd": null,
           "tpm": null,
@@ -1534,7 +1429,7 @@
         {
           "id": "z-ai/glm4.7",
           "name": "GLM 4.7",
-          "context": 8192,
+          "context": 131072,
           "rpm": 40,
           "rpd": null,
           "tpm": null,
@@ -1543,7 +1438,7 @@
         {
           "id": "z-ai/glm5.1",
           "name": "GLM 5.1",
-          "context": 8192,
+          "context": 200000,
           "rpm": 40,
           "rpd": null,
           "tpm": null,
@@ -1552,11 +1447,13 @@
         {
           "id": "z-ai/glm-5.2",
           "name": "GLM 5.2",
-          "context": 8192,
+          "context": 1000000,
           "rpm": 40,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "Same GLM-5.2 frontier flagship as Cloudflare's pick, now with its context window corrected to the real 1M."
         },
         {
           "id": "abacusai/dracarys-llama-3.1-70b-instruct",
@@ -1631,7 +1528,9 @@
           "rpm": null,
           "rpd": null,
           "tpm": null,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "Google's most advanced current model — strongest of the 7 free Gemini options."
         },
         {
           "id": "gemini-3-flash-preview",
@@ -1681,7 +1580,7 @@
       "typicalLimits": "35 free models via the \"Experiment\" plan (~1 req/sec, 500K TPM) plus Codestral (30 RPM · 2,000 RPD)",
       "models": [
         {
-          "id": "mistral-medium-3-5-26-04",
+          "id": "mistral-medium-2604",
           "name": "Mistral Medium 3.5",
           "context": 256000,
           "rpm": null,
@@ -1705,7 +1604,9 @@
           "rpm": null,
           "rpd": null,
           "tpm": 500000,
-          "tpd": null
+          "tpd": null,
+          "flagship": true,
+          "flagshipNote": "Mistral Large 3 — Mistral's own flagship general-purpose model, strongest of its 35 free options."
         },
         {
           "id": "ministral-14b-2512",
@@ -1997,5 +1898,10 @@
         }
       ]
     }
-  ]
+  ],
+  "topPick": {
+    "providerId": "cloudflare-ai",
+    "modelId": "@cf/glm-5.2",
+    "why": "GLM-5.2 (Z.ai) is the strongest model available across every free-tier provider in this catalog as of 2026-07-07 -- a 744B-parameter MoE frontier open-weight model that beats GPT-5.5 on multiple long-horizon coding benchmarks. Cloudflare Workers AI is the pick over NVIDIA NIM's identical model because it needs no phone-number verification and has no per-request RPM ceiling (shared neuron budget instead)."
+  }
 }

@@ -204,19 +204,37 @@ case "$cmd" in
         process.stdout.write(v);
       ' 2>/dev/null || true)"
     fi
-    # Read the model-alias map (config.json .session.aliases). ccx reads
-    # CCX_ALIAS_* after sourcing the provider .env (an .env value still wins) and
-    # forwards them as ANTHROPIC_DEFAULT_*_MODEL.
+    # Read the model-alias map. The ACTIVE PROVIDER's own .env
+    # (~/.claude-providers/<provider>.env, CCX_ALIAS_SONNET/OPUS/HAIKU) always
+    # wins when declared — ccx sources it after this script exports the
+    # config.json fallback, so its value is what actually reaches Claude Code.
+    # Checking it here too (not just leaving it to ccx) keeps the banner
+    # honest: without this, switching providers (e.g. mimo -> freetier) left
+    # the banner showing the OLD provider's model names from config.json's
+    # global .session.aliases even though the new provider's .env silently
+    # overrode them at exec time — functionally correct but deeply misleading.
     _sw_alias() {
       node -e '
         const fs = require("fs");
+        const H = process.env.HOME;
+        const key = process.argv[1];
+        const provider = process.argv[2];
+        const envKey = "CCX_ALIAS_" + key.toUpperCase();
+        if (provider) {
+          try {
+            const t = fs.readFileSync(H + "/.claude-providers/" + provider + ".env", "utf8");
+            const re = new RegExp("^\\s*(?:export\\s+)?" + envKey + "\\s*=\\s*\"?([^\"\\n]*)\"?", "m");
+            const m = t.match(re);
+            if (m && m[1]) { process.stdout.write(m[1]); return; }
+          } catch (e) { /* provider has no .env yet */ }
+        }
         try {
-          const c = JSON.parse(fs.readFileSync(process.env.HOME + "/.sidewrite/config.json", "utf8"));
+          const c = JSON.parse(fs.readFileSync(H + "/.sidewrite/config.json", "utf8"));
           const a = (c.session && c.session.aliases) || {};
-          const v = a[process.argv[1]];
+          const v = a[key];
           process.stdout.write(v ? String(v) : "");
         } catch (e) { /* no aliases */ }
-      ' "$1" 2>/dev/null || true
+      ' "$1" "$provider" 2>/dev/null || true
     }
     AL_SONNET="$(_sw_alias sonnet)"
     AL_OPUS="$(_sw_alias opus)"

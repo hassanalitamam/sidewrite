@@ -110,6 +110,11 @@ export default function Nav() {
               faq
             </a>
           )}
+          {!m && (
+            <a href="#v3-contact" className="sw-navlink" style={linkBase}>
+              contact
+            </a>
+          )}
           <a
             href="/docs/"
             className="sw-navlink"

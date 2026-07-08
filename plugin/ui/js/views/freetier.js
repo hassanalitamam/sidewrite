@@ -15,17 +15,45 @@ import { $, $$, icon } from "../dom.js";
 import { esc, fmtNum } from "../format.js";
 import { api } from "../api.js";
 import { toast } from "../components/toast.js";
+import { state as appState } from "../store.js";
 
 const state = {
   keys: [],
   catalog: [],
+  topPick: null,
+  tokensToday: 0,
   endpoint: "",
   token: "",
   tokenShown: false,
   modalProviderId: null,  // catalog id whose "View models" popup is open, or null
   modalSearch: "",        // live filter text inside that popup
   selectedModels: new Set(), // "<providerId>::<modelId>" keys checked for the batch-add bar
+  activateTier: "sonnet", // tier picked in the Activate control (sonnet|opus|haiku)
 };
+
+// Not render state — a live handle, not data to serialize/diff. Polls
+// GET /api/freetier while a provider's "View models" modal is open so its
+// RPM/RPD/TPM/TPD bars (axisRowsHtml) move on their own instead of only
+// refreshing once when the modal was opened. This is the first polling loop
+// in this dashboard (every other "live" view is SSE-push) — deliberately
+// scoped to just the open modal's lifetime rather than the whole page, since
+// that's the only place these particular numbers render.
+let modalPollTimer = null;
+function stopModalPoll() {
+  if (modalPollTimer) { clearInterval(modalPollTimer); modalPollTimer = null; }
+}
+function startModalPoll() {
+  stopModalPoll();
+  modalPollTimer = setInterval(async () => {
+    if (!state.modalProviderId) { stopModalPoll(); return; }
+    try {
+      const list = await api("/api/freetier");
+      state.keys = Array.isArray(list.keys) ? list.keys : state.keys;
+      state.tokensToday = list.tokensToday || 0;
+      renderModalResultsOnly();
+    } catch (_) { /* transient — next tick retries */ }
+  }, 4000);
+}
 
 const TIER_LABEL = { opus: "opus", sonnet: "sonnet", haiku: "haiku" };
 const RISK_LABEL = { ok: "", caution: "ToS: caution", avoid: "ToS: avoid" };
@@ -153,6 +181,22 @@ function monthlyProjectionText(k) {
 // expands it below (see providerRowHtml) — the chart IS the "suggested next"
 // list now, not a separate widget with its own numbers to reconcile.
 // ---------------------------------------------------------------------------
+// Real (not projected) usage: total tokens actually consumed today across
+// every free-tier key, from pool-limiter's live counter (see GET /api/freetier's
+// `tokensToday`). Shown above capacityHeroHtml()'s card, which is a DIFFERENT
+// concept (hypothetical/projected daily ceiling from declared limits) — kept
+// as a separate stat rather than merged into that card so neither number is
+// lost.
+function usageTodayHtml() {
+  return '<div class="card" style="padding:20px;margin-top:16px;">' +
+    '<div class="prov-name">Your usage today</div>' +
+    '<div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;">' +
+      '<span style="font-size:28px; font-weight:600; line-height:1;">' + fmtNum(Math.round(state.tokensToday || 0)) + " tokens</span>" +
+    "</div>" +
+    '<div class="hint" style="margin-top:2px;">Real usage — every request actually dispatched through a connected free provider today.</div>' +
+  "</div>";
+}
+
 function capacityHeroHtml() {
   const s = capacitySummary();
   if (!s.bars.length) return "";
@@ -276,12 +320,19 @@ function providerModelTableHtml(provider) {
     if (connected) return connected;
     return '<div class="empty" style="padding:16px;">No models match "' + esc(state.modalSearch) + '".</div>';
   }
+  // The researched flagship (see pool-providers.json's flagship/flagshipNote
+  // fields) always sorts first, so the strongest free model a provider offers
+  // is the first thing a user sees rather than buried alphabetically.
+  models.sort((a, b) => (b.flagship ? 1 : 0) - (a.flagship ? 1 : 0));
   const rows = models.map((m) => {
     const key = provider.id + "::" + m.id;
     const est = modelDailyEstimate(m);
     const checked = state.selectedModels.has(key);
+    const flagshipBadge = m.flagship
+      ? ' <span class="badge live" title="' + esc(m.flagshipNote || "Strongest free model from this provider") + '">★ Strongest</span>'
+      : "";
     return "<tr>" +
-        '<td style="padding:5px 8px; border-bottom:1px solid var(--border-rule);">' + esc(m.name || m.id) + "</td>" +
+        '<td style="padding:5px 8px; border-bottom:1px solid var(--border-rule);">' + esc(m.name || m.id) + flagshipBadge + "</td>" +
         '<td style="padding:5px 8px; border-bottom:1px solid var(--border-rule); text-align:right;">' + (m.context != null ? fmtNum(m.context) : "—") + "</td>" +
         '<td style="padding:5px 8px; border-bottom:1px solid var(--border-rule); text-align:right;">' + (m.rpm != null ? fmtNum(m.rpm) : "—") + "</td>" +
         '<td style="padding:5px 8px; border-bottom:1px solid var(--border-rule); text-align:right;">' + (m.rpd != null ? fmtNum(m.rpd) : "—") + "</td>" +
@@ -356,6 +407,9 @@ function batchAddBarHtml(provider) {
 function providerRowHtml(provider) {
   const myKeys = state.keys.filter((k) => k.providerId === provider.id);
   const risk = RISK_LABEL[provider.tosRisk] ? '<span class="badge" title="' + esc(provider.tosNote || "") + '">' + esc(RISK_LABEL[provider.tosRisk]) + "</span>" : "";
+  const topPick = state.topPick && state.topPick.providerId === provider.id
+    ? ' <span class="badge live" title="' + esc(state.topPick.why || "") + '">🏆 Strongest overall</span>'
+    : "";
   let statusLine, nameTag = "";
   if (myKeys.length) {
     const ready = myKeys.filter((k) => k.enabled && !k.cooling).length;
@@ -373,7 +427,7 @@ function providerRowHtml(provider) {
   return '<div class="prov" style="padding:12px 14px;">' +
     '<div class="prov-top">' +
       '<div class="prov-id">' + icon("providers", "sm") +
-        '<div><div class="prov-name">' + esc(provider.name) + nameTag + "</div>" +
+        '<div><div class="prov-name">' + esc(provider.name) + nameTag + topPick + "</div>" +
         '<div class="prov-host">' + esc(statusLine) + "</div>" +
         (risk ? '<div style="margin-top:4px;">' + risk + "</div>" : "") + "</div>" +
       "</div>" +
@@ -392,10 +446,23 @@ function modelModalHtml() {
   const signupLink = provider.docsUrl
     ? '<a href="' + esc(provider.docsUrl) + '" target="_blank" rel="noreferrer noopener" style="color:var(--accent); text-decoration:underline; text-underline-offset:2px;">Get an API key ↗</a>'
     : "";
+  // Every connected key for this provider, toggled in one click — the
+  // per-key Disable button inside connectedSectionHtml/keyRow still exists
+  // for a single model; this is the "pause the whole provider" shortcut.
+  // Only rendered once there's at least one connected key to act on.
+  const myKeys = state.keys.filter((k) => k.providerId === provider.id);
+  const anyEnabled = myKeys.some((k) => k.enabled);
+  const providerToggleBtn = myKeys.length
+    ? '<button type="button" class="btn" data-ft-provider-toggle="' + esc(provider.id) + '" data-ft-provider-toggle-to="' + (anyEnabled ? "0" : "1") + '">' +
+        (anyEnabled ? "Disable all" : "Enable all") + "</button>"
+    : "";
   return '<div class="modal-head" style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">' +
       "<div><h2>" + esc(provider.name) + '</h2><p class="modal-step-note" style="margin:0;">' + esc(provider.typicalLimits || "") + "</p>" +
         (signupLink ? '<p class="modal-step-note" style="margin:4px 0 0;">' + signupLink + "</p>" : "") + "</div>" +
-      '<button type="button" class="btn" data-ft-modal-close aria-label="Close">&times;</button>' +
+      '<div style="display:flex; gap:8px; align-items:center;">' +
+        providerToggleBtn +
+        '<button type="button" class="btn" data-ft-modal-close aria-label="Close">&times;</button>' +
+      "</div>" +
     "</div>" +
     '<div class="modal-body">' +
       (count > 8
@@ -418,7 +485,23 @@ function renderModalResultsOnly() {
   const resultsEl = modalBody.querySelector("[data-ft-modal-results]");
   if (resultsEl) resultsEl.innerHTML = providerModelTableHtml(provider);
   const barEl = modalBody.querySelector("[data-ft-modal-batchbar]");
-  if (barEl) barEl.innerHTML = batchAddBarHtml(provider);
+  if (barEl) {
+    // This also re-runs on the 4s modalPollTimer tick (see startModalPoll),
+    // independent of anything the user is doing — rebuilding the bar's
+    // innerHTML unconditionally would silently wipe an API key the user is
+    // mid-typing/pasting into data-ft-batch-key. Preserve it across the rebuild.
+    const prevKeyInput = barEl.querySelector("[data-ft-batch-key]");
+    const prevKeyVal = prevKeyInput ? prevKeyInput.value : "";
+    const hadFocus = !!prevKeyInput && prevKeyInput === document.activeElement;
+    barEl.innerHTML = batchAddBarHtml(provider);
+    if (prevKeyVal) {
+      const nextKeyInput = barEl.querySelector("[data-ft-batch-key]");
+      if (nextKeyInput) {
+        nextKeyInput.value = prevKeyVal;
+        if (hadFocus) nextKeyInput.focus();
+      }
+    }
+  }
 }
 
 function keyRow(k, idx, tierRows) {
@@ -472,6 +555,9 @@ export function renderFreetier() {
   }
 
   const tokenValue = state.tokenShown ? esc(state.token) : "•".repeat(Math.max(8, (state.token || "").length));
+  const activeTier = appState.active && appState.active.provider === "freetier" && typeof appState.active.model === "string"
+    ? appState.active.model.replace(/^pool-/, "")
+    : null;
   // One list, ordered the same as the capacity bars above it (highest
   // potential first) so a bar and its row line up spatially — registered
   // providers render their live key card(s); unregistered ones render a
@@ -482,6 +568,15 @@ export function renderFreetier() {
   root.innerHTML =
     '<p class="eyebrow">' + icon("providers", "sm") + 'Free Lane <span class="hint">— pools your free-tier keys behind one Anthropic-compatible endpoint, with tier-aware fallback</span></p>' +
     '<div class="card" style="padding:20px;">' +
+      '<div class="selrow" style="margin-bottom:14px; flex-wrap:wrap;">' +
+        '<select class="msel" id="ftActivateTier" style="max-width:120px;">' +
+          ["sonnet", "opus", "haiku"].map((t) => '<option value="' + t + '"' + (state.activateTier === t ? " selected" : "") + '>' + t + '</option>').join("") +
+        '</select>' +
+        '<button class="btn primary" id="ftActivate">Activate</button>' +
+        (activeTier
+          ? '<span class="badge live"><span class="bdot pulse"></span>Active for delegation — ' + esc(activeTier) + '</span>'
+          : '<span class="hint">Not active — sidewrite code / delegate use whatever provider is active elsewhere</span>') +
+      '</div>' +
       '<div class="prov-name">Endpoint &amp; unified token</div>' +
       '<div class="hint" style="margin-bottom:10px;">Wire this into a provider pointing at the pool (Base URL below, key = the token below), the same way any other Anthropic-compatible provider is added.</div>' +
       '<div class="selrow"><code class="mono">' + esc(state.endpoint) + '</code></div>' +
@@ -492,6 +587,7 @@ export function renderFreetier() {
         '<button class="btn" id="ftTokenRegen" title="Invalidates the old token — re-wire any provider using it">Regenerate</button>' +
       '</div>' +
     '</div>' +
+    usageTodayHtml() +
     capacityHeroHtml() +
     providerListHtml +
     // Closed by default — the provider list above (with its "View models"
@@ -603,6 +699,8 @@ export async function loadFreetier() {
     const [list, tok] = await Promise.all([api("/api/freetier"), api("/api/freetier/token")]);
     state.keys = Array.isArray(list.keys) ? list.keys : [];
     state.catalog = Array.isArray(list.catalog) ? list.catalog : [];
+    state.topPick = list.topPick || null;
+    state.tokensToday = list.tokensToday || 0;
     state.endpoint = list.endpoint || tok.endpoint || "";
     state.token = tok.token || "";
     renderFreetier();
@@ -619,7 +717,28 @@ export function wireFreetier() {
   const root = $("#freetierRoot");
   if (!root) return;
 
+  root.addEventListener("change", (e) => {
+    if (e.target.id === "ftActivateTier") {
+      state.activateTier = e.target.value;
+    }
+  });
+
   root.addEventListener("click", async (e) => {
+    if (e.target.closest("#ftActivate")) {
+      const btn = e.target.closest("#ftActivate");
+      btn.disabled = true;
+      try {
+        const r = await api("/api/freetier/activate", { method: "POST", body: JSON.stringify({ tier: state.activateTier }) });
+        if (r && r.active) appState.active = { provider: r.active.provider, model: r.active.model };
+        renderFreetier();
+        toast("Free Lane active (" + state.activateTier + ") — sidewrite code and delegate now route through the pool", "ok");
+      } catch (err) {
+        toast("Activate failed: " + err.message, "err");
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
     if (e.target.closest("#ftTokenShow")) {
       state.tokenShown = !state.tokenShown;
       renderFreetier();
@@ -639,6 +758,7 @@ export function wireFreetier() {
       state.modalSearch = "";
       state.selectedModels = new Set();
       renderFreetier();
+      startModalPoll();
       return;
     }
     if (e.target.closest("#ftTokenRegen")) {
@@ -700,7 +820,27 @@ export function wireFreetier() {
     if (e.target.closest("[data-ft-modal-close]") || e.target === modal) {
       state.modalProviderId = null;
       state.selectedModels = new Set();
+      stopModalPoll();
       renderFreetier();
+      return;
+    }
+    // "Disable all" / "Enable all" — bulk-toggles every key registered
+    // against this provider in one action (see modelModalHtml()'s header).
+    const providerToggle = e.target.closest("[data-ft-provider-toggle]");
+    if (providerToggle) {
+      const providerId = providerToggle.dataset.ftProviderToggle;
+      const enabling = providerToggle.dataset.ftProviderToggleTo === "1";
+      if (!enabling) {
+        // Warn if this provider supplies every currently-enabled key in a
+        // tier — disabling it would leave that tier with nothing to route to.
+        const tiersAtRisk = Array.from(new Set(state.keys.filter((k) => k.providerId === providerId && k.enabled).map((k) => k.tier)))
+          .filter((tier) => state.keys.filter((k) => k.tier === tier && k.enabled).every((k) => k.providerId === providerId));
+        if (tiersAtRisk.length && !confirm("This disables your only enabled " + tiersAtRisk.join("/") + " key(s) in Free Lane. Continue?")) return;
+      }
+      try {
+        await api("/api/freetier/provider/" + encodeURIComponent(providerId), { method: "PATCH", body: JSON.stringify({ enabled: enabling }) });
+        await loadFreetier();
+      } catch (err) { toast("Update failed: " + err.message, "err"); }
       return;
     }
     const selectAll = e.target.closest("[data-ft-select-all]");
@@ -769,6 +909,7 @@ export function wireFreetier() {
         toast("Added " + ok + " " + label + " model" + (ok === 1 ? "" : "s") + " to Free Lane", "ok");
         state.modalProviderId = null;
         state.selectedModels = new Set();
+        stopModalPoll();
         await loadFreetier();
       } else if (ok) {
         toast("Added " + ok + " of " + modelIds.length + " " + label + " models — " + failed.length + " failed", "err");

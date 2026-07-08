@@ -2104,6 +2104,94 @@ function withBody(req, res, handler) {
 }
 
 // ---------------------------------------------------------------------------
+// Feedback queueing & forwarding
+// ---------------------------------------------------------------------------
+const FEEDBACK_QUEUE_DIR = path.join(HOME, '.sidewrite', 'feedback-queue');
+
+function ensureFeedbackQueueDir() {
+  try {
+    fs.mkdirSync(FEEDBACK_QUEUE_DIR, { recursive: true, mode: 0o700 });
+  } catch (_) {
+    // best-effort; if dir can't be created, queue write will also fail gracefully
+  }
+}
+
+function queueFeedback(payload) {
+  ensureFeedbackQueueDir();
+  try {
+    const queueFile = path.join(FEEDBACK_QUEUE_DIR, Date.now() + '-' + crypto.randomUUID() + '.json');
+    const tmp = queueFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
+    fs.renameSync(tmp, queueFile);
+  } catch (_) {
+    // If queueing fails, log silently — the user already got a 200 response
+    // and we don't want to break the daemon
+  }
+}
+
+function postToLanding(endpoint, payload, timeoutMs, cb) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch (_) {
+    return cb(new Error('invalid endpoint URL'));
+  }
+
+  const https = require('node:https');
+  const body = JSON.stringify(payload);
+
+  // Idempotent callback: the 'timeout' handler calls req.destroy(), which can
+  // also surface an 'error' event, so guard against invoking cb twice (matches
+  // the finish()/done pattern used elsewhere in this file). A double cb here
+  // would call sendJson twice and throw ERR_HTTP_HEADERS_SENT.
+  let done = false;
+  const finish = (err) => {
+    if (done) return;
+    done = true;
+    cb(err);
+  };
+
+  const req = https.request(
+    {
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: url.pathname + url.search,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      },
+    },
+    (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        // Treat 2xx as success
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          finish(null);
+        } else {
+          finish(new Error('non-2xx status: ' + res.statusCode));
+        }
+      });
+    }
+  );
+
+  req.on('error', (err) => {
+    finish(err);
+  });
+
+  req.setTimeout(timeoutMs, () => {
+    req.destroy();
+    finish(new Error('feedback request timed out'));
+  });
+
+  req.write(body);
+  req.end();
+}
+
+// ---------------------------------------------------------------------------
 // Security guards
 // ---------------------------------------------------------------------------
 function hostAllowed(req) {
@@ -3177,12 +3265,23 @@ function router(req, res) {
       // declared a limit on, same "no limit declared = no data" contract
       // limitsText() already renders around.
       red.usage = poolRouter.usageSnapshot(k);
+      // Rolling avg response time (ms) this candidate has actually measured —
+      // null until its first successful dispatch. Drives the router's
+      // latency-based tie-break and doubles as a live "which model is fastest
+      // right now" signal for the dashboard.
+      const ema = poolRouter._debugLatencyEma.get(k.id);
+      red.avgLatencyMs = typeof ema === 'number' ? Math.round(ema) : null;
       return red;
     });
     sendJson(res, 200, {
       keys,
       catalog: require('../data/pool-providers.json').providers,
+      topPick: require('../data/pool-providers.json').topPick || null,
       endpoint: 'http://' + HOST + ':' + state.port,
+      // Real tokens consumed today across every free-tier key, for the
+      // dashboard's "tokens used today" stat — distinct from the
+      // capacity-hero card's projected/estimated numbers.
+      tokensToday: poolRouter.tokensUsedToday(),
     });
     return;
   }
@@ -3245,7 +3344,50 @@ function router(req, res) {
     return;
   }
   if (pathname === '/api/freetier/token' && method === 'POST') {
-    sendJson(res, 200, { token: pool.regeneratePoolToken() });
+    const token = pool.regeneratePoolToken();
+    // Keep the on-disk ccx provider file (~/.claude-providers/freetier.env) in
+    // sync immediately — whichever mode is currently wired to the pool
+    // (standalone session-provider, or the subscription-mode active model set
+    // via POST /api/freetier/activate below) must never silently break just
+    // because the token rotated. No-op-safe: only (re)writes the file.
+    try { writeFreetierCcxEnv(); } catch (_) {}
+    sendJson(res, 200, { token });
+    return;
+  }
+
+  // POST /api/freetier/activate  { tier } — one-click wiring for BOTH launch
+  // paths, which resolve the provider two DIFFERENT ways:
+  //   - `sidewrite code` (standalone) resolves provider from config.json's
+  //     session.provider FIRST, falling back to active.json only when that's
+  //     empty — so setting active.json alone (as this route did originally)
+  //     is silently ignored whenever a session.provider is already set (e.g.
+  //     "mimo" from onboarding), and `code` keeps launching the old provider.
+  //   - `/sidewrite-delegate` (subscription) resolves purely from
+  //     GET /api/active (active.json).
+  // So this writes the Free Lane pool's ccx provider file (idempotent, same
+  // as the standalone session-provider save path), sets config.session.provider
+  // to 'freetier' (same effect as picking "Free Lane" in the standalone
+  // session-provider dropdown), AND sets it as the active model — covering
+  // both paths in one call. tier is sonnet|opus|haiku (default sonnet); note
+  // the provider file's own CCX_ALIAS_SONNET/OPUS/HAIKU already map 1:1 onto
+  // pool-sonnet/opus/haiku, so `sidewrite code` gets correct per-alias tier
+  // routing regardless of which tier is picked here — this only picks the
+  // one model surfaced to /api/active for delegation.
+  if (pathname === '/api/freetier/activate' && method === 'POST') {
+    withBody(req, res, (body) => {
+      const tier = ['sonnet', 'opus', 'haiku'].includes(body.tier) ? body.tier : 'sonnet';
+      try {
+        writeFreetierCcxEnv();
+      } catch (e) {
+        sendJson(res, 500, { ok: false, error: e.message });
+        return;
+      }
+      writeConfig({ session: { provider: 'freetier' } });
+      writeActive('freetier', 'pool-' + tier);
+      state.activeProvider = 'freetier';
+      ingestEvent({ type: 'active_changed', provider: 'freetier', model: 'pool-' + tier, ts: nowTs() });
+      sendJson(res, 200, { ok: true, active: readActive(), config: readConfig() });
+    });
     return;
   }
 
@@ -3255,6 +3397,23 @@ function router(req, res) {
     withBody(req, res, (body) => {
       pool.reorderFreetierKeys(Array.isArray(body.ids) ? body.ids : []);
       sendJson(res, 200, { ok: true, keys: pool.listFreetierKeys().map(pool.redact) });
+    });
+    return;
+  }
+
+  // PATCH /api/freetier/provider/:providerId — bulk enable/disable every
+  // registered key for one provider in a single action (the "Disable all" /
+  // "Enable all" toggle in the model modal). Mirrors the per-key PATCH
+  // /api/freetier/:id shape, just scoped to every key sharing a providerId.
+  // Must be checked before the generic /api/freetier/:id handler below, or
+  // that handler would treat "provider/<id>" as a single (invalid) key id.
+  if (pathname.startsWith('/api/freetier/provider/') && method === 'PATCH') {
+    const providerId = decodeURIComponent(pathname.slice('/api/freetier/provider/'.length));
+    withBody(req, res, (body) => {
+      const enabled = body.enabled !== false;
+      const matches = pool.listFreetierKeys().filter((k) => k.providerId === providerId);
+      for (const k of matches) pool.writeFreetierKey(k.id, { enabled });
+      sendJson(res, 200, { ok: true, updated: matches.length });
     });
     return;
   }
@@ -3544,6 +3703,98 @@ function router(req, res) {
 
       const cfg = writeConfig(patch);
       sendJson(res, 200, Object.assign({ ok: true }, safeConfigView(cfg)));
+    });
+    return;
+  }
+
+  // POST /api/feedback — ingest user feedback from the plugin UI. Validates shape,
+  // scrubs secrets/PII client-side-scrubbed data defensively, attaches event log
+  // if requested, and forwards to the landing feedback endpoint with local queue
+  // fallback on network failure.
+  if (pathname === '/api/feedback' && method === 'POST') {
+    withBody(req, res, (body) => {
+      body = body || {};
+      const message = body.message;
+      const email = body.email;
+      const attach_log = body.attach_log === true; // expect boolean
+      const run_id = body.run_id; // optional string
+
+      // Validate message: required, non-empty string
+      if (!message || typeof message !== 'string' || message.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'message required (non-empty string)' });
+        return;
+      }
+
+      // Validate email: required, non-empty string
+      if (!email || typeof email !== 'string' || email.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'email required (non-empty string)' });
+        return;
+      }
+
+      // Scrub message and email defensively (even though client-side scrubbed)
+      let scrubbedMessage = errorScrub.scrubString(message);
+      let scrubbedEmail = errorScrub.scrubString(email);
+
+      // If scrubbing removed content from required fields, reject
+      if (!scrubbedMessage || scrubbedMessage.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'message scrubbed to empty; invalid content' });
+        return;
+      }
+      if (!scrubbedEmail || scrubbedEmail.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'email scrubbed to empty; invalid content' });
+        return;
+      }
+
+      // Build payload server-side: never trust client-supplied version/platform/install_id
+      const cfg = readConfig();
+      const telemetryEnabled = cfg.telemetry && cfg.telemetry.level !== 'off';
+      const payload = {
+        message: scrubbedMessage,
+        email: scrubbedEmail,
+        version: VERSION,
+        platform: process.platform,
+        install_id: telemetryEnabled ? getInstallId() : null,
+      };
+
+      // Optional: include phone if present in request
+      if (body.phone && typeof body.phone === 'string' && body.phone.length > 0) {
+        payload.phone = errorScrub.scrubString(body.phone);
+      }
+
+      // Optional: attach event log if requested
+      let attachedLog = null;
+      if (attach_log && run_id && typeof run_id === 'string') {
+        ensureDb();
+        try {
+          const events = stmts.eventsForRun.all(run_id);
+          if (events && events.length > 0) {
+            // Convert to JSONL: one JSON.stringify per line
+            const jsonlLines = events.map((e) => JSON.stringify(e));
+            attachedLog = jsonlLines.join('\n');
+            // Scrub the attached log
+            attachedLog = errorScrub.scrubString(attachedLog);
+          }
+        } catch (_) {
+          // Silently ignore if run_id doesn't exist or query fails
+        }
+      }
+      if (attachedLog) {
+        payload.attached_log = attachedLog;
+      }
+
+      // POST to landing feedback endpoint
+      const feedbackEndpoint = 'https://sidewrite.vercel.app/api/feedback';
+      const feedbackTimeout = 8000; // 8 second timeout
+      postToLanding(feedbackEndpoint, payload, feedbackTimeout, (err) => {
+        if (err) {
+          // Network failure: queue to disk for retry
+          queueFeedback(payload);
+          sendJson(res, 200, { ok: true, queued: true });
+        } else {
+          // Success
+          sendJson(res, 200, { ok: true });
+        }
+      });
     });
     return;
   }

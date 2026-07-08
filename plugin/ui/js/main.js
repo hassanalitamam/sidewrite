@@ -18,6 +18,7 @@ import { wireRunsHistory, enterRunsHistory } from "./views/history.js";
 import { wireHealth } from "./views/health.js";
 import { wireBudgets } from "./views/budgets.js";
 import { wirePrivacy } from "./views/privacy.js";
+import { wireFeedback, wireFeedbackFab } from "./views/feedback.js";
 import { initGlobalProject } from "./views/projectswitch.js";
 import { initTheme } from "./components/theme.js";
 // disabled for now: language / RTL switcher (re-enable by uncommenting this
@@ -134,6 +135,8 @@ function boot() {
   wireHealth();
   wireBudgets();
   wirePrivacy();
+  wireFeedback();
+  wireFeedbackFab();
   initGlobalProject();
 
   // initial (pre-data) renders

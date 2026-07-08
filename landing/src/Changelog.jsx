@@ -1,5 +1,5 @@
 import { useIsMobile } from "./useIsMobile.js";
-import { CHANGELOG, GITHUB_URL } from "./content.js";
+import { CHANGELOG, CURRENT_VERSION, GITHUB_URL } from "./content.js";
 import SubNav from "./components/SubNav.jsx";
 import SubFooter from "./components/SubFooter.jsx";
 import RichText from "./components/RichText.jsx";
@@ -87,6 +87,21 @@ function Entry({ release, m }) {
               }}
             >
               LATEST
+            </span>
+          )}
+          {release.beta && (
+            <span
+              style={{
+                fontFamily: mono,
+                fontSize: "10px",
+                fontWeight: 600,
+                color: "#e05a26",
+                border: "1px solid #e05a26",
+                padding: "1px 6px",
+                letterSpacing: "0.04em",
+              }}
+            >
+              BETA
             </span>
           )}
         </div>
@@ -196,7 +211,7 @@ export default function Changelog() {
             }}
           >
             Every release, in the open. Current version{" "}
-            <span style={{ fontFamily: mono, fontSize: "16px", color: "#16181c" }}>v0.1.0</span> —
+            <span style={{ fontFamily: mono, fontSize: "16px", color: "#16181c" }}>{CURRENT_VERSION}</span> —
             zero dependencies, built on Node built-ins.
           </p>
         </div>

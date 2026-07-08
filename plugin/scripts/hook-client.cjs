@@ -10,6 +10,10 @@
  *
  * Subcommands:
  *   print-status       - GET /api/health; print viewer URL + current stage.
+ *   status-fast        - status.json fast path, falls back to in-process
+ *                         HTTP GET /api/health. A single node invocation
+ *                         (no shell `||`/`$()`/curl) so slash commands only
+ *                         need the Bash(node:*) permission pattern.
  *   flush-idempotent   - safe no-op POST (SessionEnd); tolerates a dead daemon.
  *   event <json>       - POST an arbitrary event JSON (from argv) to /event.
  *
@@ -25,6 +29,7 @@ const http = require('http');
 const HOME = process.env.HOME || os.homedir();
 const DATA_DIR = path.join(HOME, '.sidewrite');
 const DAEMON_JSON = path.join(DATA_DIR, 'daemon.json');
+const STATUS_JSON = path.join(DATA_DIR, 'status.json');
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -128,6 +133,53 @@ async function cmdPrintStatus() {
   return 0;
 }
 
+function readStatusFile() {
+  try {
+    return JSON.parse(fs.readFileSync(STATUS_JSON, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function formatSnapshot(s, port) {
+  const a = s.active || {};
+  return (
+    'sidewrite viewer: running\n' +
+    '  url:     http://127.0.0.1:' + (s.port || port) + '\n' +
+    '  version: ' + (s.version || 'unknown') + '\n' +
+    '  mode:    ' + (s.mode || 'unknown') + '\n' +
+    '  stage:   ' + ((s.pipeline && s.pipeline.stage) || 'idle') + '\n' +
+    '  active:  ' + ((a.provider || '?') + '/' + (a.model || '?')) + '\n'
+  );
+}
+
+async function cmdStatusFast() {
+  const fileSnap = readStatusFile();
+  if (fileSnap) {
+    const hb = Number(fileSnap.heartbeat_ts);
+    const ttl = Number(fileSnap.ttl_seconds);
+    if (isFinite(hb) && isFinite(ttl) && Date.now() - hb <= ttl * 1000) {
+      process.stdout.write(formatSnapshot(fileSnap));
+      return 0;
+    }
+  }
+  const info = readDaemonInfo();
+  if (!info) {
+    process.stdout.write('sidewrite viewer: not running\n');
+    return 0;
+  }
+  const res = await request(info, 'GET', '/api/health', null, 2000);
+  const h = res && res.status === 200 ? parseJsonSafe(res.body) : null;
+  if (!h) {
+    process.stdout.write(
+      'sidewrite viewer: not reachable on http://127.0.0.1:' + info.port + '\n'
+    );
+    return 0;
+  }
+  process.stdout.write(formatSnapshot(h, info.port));
+  return 0;
+}
+
 async function cmdFlushIdempotent() {
   const info = readDaemonInfo();
   if (!info) {
@@ -181,6 +233,9 @@ async function main() {
   switch (cmd) {
     case 'print-status':
       code = await cmdPrintStatus();
+      break;
+    case 'status-fast':
+      code = await cmdStatusFast();
       break;
     case 'flush-idempotent':
       code = await cmdFlushIdempotent();

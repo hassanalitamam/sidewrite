@@ -8,6 +8,7 @@ import Safety from "./components/Safety.jsx";
 import Comparison from "./components/Comparison.jsx";
 import Install from "./components/Install.jsx";
 import Faq from "./components/Faq.jsx";
+import Contact from "./components/Contact.jsx";
 import Footer from "./components/Footer.jsx";
 
 /**
@@ -47,6 +48,7 @@ export default function App({
       {showComparison && <Comparison />}
       <Install copyLabel={copyLabel} onCopy={copy} />
       <Faq />
+      <Contact />
       <Footer onCopy={copy} />
     </div>
   );
