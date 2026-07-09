@@ -7,7 +7,7 @@ Claude Code burns through your weekly limit fastest during implementation — re
 No external dependencies. Just Node. Apache-2.0.
 
 <p align="center">
-  <img src="assets/screenshots/runs.png" alt="Sidewrite's Runs page — a history of delegated tasks, each with its status and the model that ran it" width="820">
+  <img src="https://raw.githubusercontent.com/hassanalitamam/sidewrite/main/assets/screenshots/runs.png" alt="Sidewrite's Runs page — a history of delegated tasks, each with its status and the model that ran it" width="820">
 </p>
 
 ---
@@ -58,7 +58,7 @@ One local gateway fronts 9 free-tier providers (197 models, no card required) an
 - **Sticky sessions** — you stay on the same provider for a conversation whenever possible.
 
 <p align="center">
-  <img src="assets/screenshots/providers.png" alt="Sidewrite's Free Lane pane — pooled free-tier providers, capacity claimed, and per-provider connection status" width="820">
+  <img src="https://raw.githubusercontent.com/hassanalitamam/sidewrite/main/assets/screenshots/providers.png" alt="Sidewrite's Free Lane pane — pooled free-tier providers, capacity claimed, and per-provider connection status" width="820">
 </p>
 
 ## Providers
