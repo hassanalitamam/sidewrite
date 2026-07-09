@@ -1,10 +1,14 @@
 # Sidewrite
 
-**Run Claude Code on any model — with or without a subscription.**
+**Hit your Claude usage limit? Keep coding.**
 
-Plan and review on Claude. Let a cheap (or free) external model do the actual typing. Watch every run, token, and dollar on a local dashboard.
+Claude Code burns through your weekly limit fastest during implementation — reading files, running tools, iterating. Sidewrite keeps Claude for planning and review, delegates that grind to another model (free-tier or your own key), and switches you over automatically the moment you run out.
 
 No external dependencies. Just Node. Apache-2.0.
+
+<p align="center">
+  <img src="assets/screenshots/runs.png" alt="Sidewrite's Runs page — a history of delegated tasks, each with its status and the model that ran it" width="820">
+</p>
 
 ---
 
@@ -52,6 +56,10 @@ One local gateway fronts 9 free-tier providers (197 models, no card required) an
 - **Auto-renewing budgets** — a cooling-down provider isn't dead weight; its rate limit refills continuously and it rejoins rotation the moment it has room, no manual reset.
 - **Failover on the fly** — a bad key, rate limit, or timeout falls through to the next provider mid-conversation, with a context-handoff note if it has to swap.
 - **Sticky sessions** — you stay on the same provider for a conversation whenever possible.
+
+<p align="center">
+  <img src="assets/screenshots/providers.png" alt="Sidewrite's Free Lane pane — pooled free-tier providers, capacity claimed, and per-provider connection status" width="820">
+</p>
 
 ## Providers
 
