@@ -309,6 +309,20 @@ export const CHANGELOG = [
     beta: true,
     entries: [
       {
+        tag: "FIX",
+        parts: [
+          { strong: "Onboarding only ever offered a paid provider." },
+          " Finishing setup required adding your own API key, even though the Free-Tier Pool needs no paid account. Added a real free-provider path that routes to the Free Lane pane instead of claiming instant, keyless setup.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Removed an inflated tokens/day figure from the Free Lane pane." },
+          " It summed every provider's rate limit assuming continuous 24/7 use, ballooning into implausible numbers. Requests/day — directly grounded in published limits — stays.",
+        ],
+      },
+      {
         tag: "NEW",
         parts: [
           { strong: "Feedback modal with attachments." },
