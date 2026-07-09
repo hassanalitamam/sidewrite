@@ -11,8 +11,7 @@ import {
 import { api } from "../api.js";
 import { pushRunLog } from "../events.js";
 import { toast } from "../components/toast.js";
-import { enterFeedback } from "./feedback.js";
-import { showPage } from "../router.js";
+import { openFeedbackModal } from "./feedback.js";
 
 // Total tokens backing a cost block — distinguishes an UNPRICED provider ($0 with
 // real tokens) from a genuinely blank/zero cost. Mirrors history.js's old helper.
@@ -407,8 +406,7 @@ export function wireRuns() {
 
     const report = e.target.closest("#runReport");
     if (report && state.focusRunId) {
-      enterFeedback({ runId: state.focusRunId });
-      showPage("feedback");
+      openFeedbackModal({ runId: state.focusRunId });
     }
   });
 

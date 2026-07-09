@@ -94,27 +94,31 @@ export function layout(m) {
       padding: "28px 0",
       borderBottom: "1px solid #d9d6cf",
     },
-    installH2: {
-      fontSize: m ? "36px" : "56px",
-      fontWeight: 900,
-      letterSpacing: "-0.025em",
-      textTransform: "uppercase",
-      margin: "0 0 14px",
+    // Divider between the two halves of a merged chapter (e.g. Modes → Features,
+    // Safety → Comparison) — same visual weight as a section border, but inline
+    // so it doesn't read as a new numbered chapter.
+    chapterDivider: {
+      marginTop: m ? "48px" : "80px",
+      paddingTop: m ? "48px" : "80px",
+      borderTop: "1px solid #e5e3dd",
     },
-    installOuter: {
+    // Slim, unnumbered install recap bar — a fraction of the old full-section
+    // height, since the Hero already carries the primary install moment.
+    installBarOuter: {
       maxWidth: "1240px",
       margin: "0 auto",
-      padding: m ? "56px 18px" : "104px 36px",
+      padding: m ? "28px 18px" : "36px 36px",
       textAlign: "center",
     },
-    faqGrid: {
-      maxWidth: "1240px",
-      margin: "0 auto",
-      padding: m ? "56px 18px" : "104px 36px",
-      display: "grid",
-      gridTemplateColumns: m ? "1fr" : "1fr 1.6fr",
-      gap: m ? "24px" : "64px",
-      alignItems: "start",
+    // Full-width promoted Free-Tier Pool diagram — the page's signature visual.
+    poolDiagramFull: {
+      marginTop: m ? "28px" : "40px",
+      paddingTop: m ? "28px" : "40px",
+      borderTop: "1px dashed #e5e3dd",
+      display: "flex",
+      flexDirection: m ? "column" : "row",
+      alignItems: "center",
+      gap: m ? "16px" : "24px",
     },
   };
 }

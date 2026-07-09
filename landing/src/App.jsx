@@ -2,13 +2,10 @@ import { useCopy } from "./useCopy.js";
 import { TAGLINE_OPTIONS } from "./content.js";
 import Nav from "./components/Nav.jsx";
 import Hero from "./components/Hero.jsx";
-import Modes from "./components/Modes.jsx";
-import Features from "./components/Features.jsx";
-import Safety from "./components/Safety.jsx";
-import Comparison from "./components/Comparison.jsx";
+import HowItWorks from "./components/HowItWorks.jsx";
+import WhyTrustIt from "./components/WhyTrustIt.jsx";
 import Install from "./components/Install.jsx";
-import Faq from "./components/Faq.jsx";
-import Contact from "./components/Contact.jsx";
+import GetStarted from "./components/GetStarted.jsx";
 import Footer from "./components/Footer.jsx";
 
 /**
@@ -42,13 +39,10 @@ export default function App({
     >
       <Nav />
       <Hero tagline={tagline} copyLabel={copyLabel} onCopy={copy} />
-      <Modes />
-      <Features />
-      <Safety />
-      {showComparison && <Comparison />}
+      <HowItWorks />
+      <WhyTrustIt showComparison={showComparison} />
       <Install copyLabel={copyLabel} onCopy={copy} />
-      <Faq />
-      <Contact />
+      <GetStarted />
       <Footer onCopy={copy} />
     </div>
   );

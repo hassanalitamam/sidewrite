@@ -5,6 +5,7 @@ import { state, modeState, postConfig } from "../store.js";
 import { toast } from "../components/toast.js";
 import { renderStatus } from "../components/status.js";
 import { renderModeUI } from "./providers.js";
+import { showPage } from "../router.js";
 
 // The single .addprov node is relocated between the Providers page and the
 // onboarding host during onboarding.
@@ -71,8 +72,13 @@ export function refreshOnboarding() {
   if (!modal) return;
   const m = modeState();
   const haveProv = (state.providers || []).length > 0;
+  // The Free-Tier Pool is a separate registry (never listed in state.providers
+  // — see listProviders()'s exclusion in viewer-daemon.cjs), so it needs its
+  // own completion check here or a user who picks it can never finish
+  // onboarding.
+  const usingFreetier = !!(state.config.session && state.config.session.provider === "freetier");
   if (!state.onboardingActive) { modal.hidden = true; restoreAddprov(); return; }
-  if (m !== "unknown" && haveProv) {
+  if (m !== "unknown" && (haveProv || usingFreetier)) {
     state.onboardingActive = false;
     modal.hidden = true;
     restoreAddprov();
@@ -110,12 +116,29 @@ export async function chooseOnboardMode(mode) {
   }
 }
 
+// Alternative to "add a provider": free providers still need their own free
+// API key pasted in (see freetier.js — "API key required" is enforced there
+// too), so this doesn't fake instant completion. It closes onboarding and
+// drops the user straight on the Free Lane pane (the Providers page's
+// default-visible track) to paste one.
+export function chooseFreetier() {
+  state.onboardingActive = false;
+  const modal = $("#onboardModal");
+  if (modal) modal.hidden = true;
+  restoreAddprov();
+  showPage("providers");
+  toast("Pick a free provider and paste its API key to finish setup", "ok");
+}
+
 // wire onboarding-modal choices + standalone settings.
 export function wireStandalone() {
   const obSub = $("#obSubscription");
   if (obSub) obSub.addEventListener("click", () => chooseOnboardMode("subscription"));
   const obStand = $("#obStandalone");
   if (obStand) obStand.addEventListener("click", () => chooseOnboardMode("standalone"));
+
+  const obFree = $("#obFreetier");
+  if (obFree) obFree.addEventListener("click", chooseFreetier);
 
   const sess = $("#sessProvider");
   if (sess) sess.addEventListener("change", populateAliasOptions);

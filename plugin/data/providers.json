@@ -652,39 +652,18 @@
     {
       "id": "xiaomi",
       "name": "Xiaomi MiMo",
-      "baseUrl": "https://api.xiaomimimo.com/anthropic",
+      "baseUrl": "https://token-plan-sgp.xiaomimimo.com/anthropic",
       "anthropicCompatible": true,
       "gateway": null,
-      "modelsEndpoint": "https://api.xiaomimimo.com/v1/models",
+      "modelsEndpoint": "https://token-plan-sgp.xiaomimimo.com/v1/models",
       "keyHint": "Xiaomi MiMo API key from the MiMo developer console. Passed as ANTHROPIC_AUTH_TOKEN.",
       "docsUrl": "https://xiaomimimo.com/",
       "logo": "/logos/xiaomi.svg",
       "local": false,
       "featured": false,
       "source": "models.dev",
-      "notes": "Verified native Anthropic endpoint at https://api.xiaomimimo.com/anthropic (messages at /anthropic/v1/messages). Serves Xiaomi MiMo models — map via CCX_ALIAS_*. models.dev id: xiaomi (mimo).",
+      "notes": "Base URL updated to https://token-plan-sgp.xiaomimimo.com/anthropic (Anthropic-protocol; messages at /anthropic/v1/messages, verified 405 on a bare GET). The host also serves an OpenAI-protocol endpoint at /v1, which is NOT used here since anthropicCompatible=true. Models list stays on the OpenAI-style /v1/models path. Serves Xiaomi MiMo models — map via CCX_ALIAS_*. models.dev id: xiaomi (mimo).",
       "models": [
-        {
-          "id": "mimo-v2-flash",
-          "name": "MiMo-V2-Flash",
-          "in": 0.14,
-          "out": 0.28,
-          "context": 262144
-        },
-        {
-          "id": "mimo-v2-omni",
-          "name": "MiMo-V2-Omni",
-          "in": 0.14,
-          "out": 0.28,
-          "context": 262144
-        },
-        {
-          "id": "mimo-v2-pro",
-          "name": "MiMo-V2-Pro",
-          "in": 0.435,
-          "out": 0.87,
-          "context": 1048576
-        },
         {
           "id": "mimo-v2.5",
           "name": "MiMo-V2.5",

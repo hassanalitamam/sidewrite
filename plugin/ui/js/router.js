@@ -12,7 +12,6 @@ import { enterRunsHistory } from "./views/history.js";
 import { enterHealth } from "./views/health.js";
 import { enterBudgets } from "./views/budgets.js";
 import { enterPrivacy } from "./views/privacy.js";
-import { enterFeedback } from "./views/feedback.js";
 import { syncGlobalProjectInto } from "./views/projectswitch.js";
 
 // Each page's router-enter hook. `runs` re-renders the live view; everything
@@ -30,14 +29,14 @@ const ENTERS = {
   health: enterHealth,
   budgets: enterBudgets,
   privacy: enterPrivacy,
-  feedback: enterFeedback,
   providers: () => {},
 };
 
 // Nav grouping (cosmetic only — every page above stays fully routable). Pages
 // not listed here are primary; these live behind the tabrow's "More" dropdown.
 // (History is no longer a page — it's folded into the Runs tab.)
-const SECONDARY_PAGES = new Set(["analytics", "health", "budgets", "privacy", "feedback"]);
+// (Feedback is no longer a page — it's now a modal dialog.)
+const SECONDARY_PAGES = new Set(["analytics", "health", "budgets", "privacy"]);
 
 export function showPage(page) {
   if (!Object.prototype.hasOwnProperty.call(PAGES, page)) page = "runs";

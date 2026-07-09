@@ -204,9 +204,9 @@ function capacityHeroHtml() {
   const headline = s.claimedReq
     ? fmtNum(Math.round(s.claimedReq)) + (s.claimedReqEstimated ? "~" : "") + " requests/day"
     : "0 requests/day";
-  const tokLine = s.claimedTok
-    ? fmtNum(Math.round(s.claimedTok)) + (s.claimedTokEstimated ? "~" : "") + " tokens/day unlocked"
-    : "no token ceiling unlocked yet";
+  // No tokens/day line here — see the "Total if every free provider is
+  // added" note below for why a summed tokens/day figure is misleading
+  // (assumes every provider's rate limit is hit continuously, 24/7).
   // The single overall bar the per-provider bars below roll up into: every
   // provider you claim (Groq's ~14k req/day, Mistral's own slice, etc.) moves
   // this one bar toward "every free provider connected" — the top-level
@@ -246,11 +246,16 @@ function capacityHeroHtml() {
     '<div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;">' +
       '<span style="font-size:28px; font-weight:600; line-height:1;">' + headline + "</span>" +
     "</div>" +
-    '<div class="hint" style="margin-top:2px;">' + tokLine + "</div>" +
     overallBar +
     '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:14px; padding-top:14px; border-top:1px solid var(--border-rule);">' +
       '<div><div class="hint">Total if every free provider is added</div>' +
-        '<div style="font-weight:600;">' + fmtNum(Math.round(s.totalPossibleReq)) + " requests/day &middot; " + fmtNum(Math.round(s.totalPossibleTok)) + " tokens/day</div>" +
+        // tokens/day intentionally omitted: it assumes every provider's rate
+        // limit is hit continuously, 24/7 — most published limits are RPM/RPD,
+        // not a real sustained-throughput figure, so summing them balloons
+        // into implausible numbers (tens of millions/day) that don't reflect
+        // real usable capacity. requests/day is directly grounded in
+        // published limits and doesn't have this problem.
+        '<div style="font-weight:600;">' + fmtNum(Math.round(s.totalPossibleReq)) + " requests/day</div>" +
       "</div>" +
       '<div><div class="hint">Still unclaimed</div>' +
         '<div style="font-weight:600;">' + fmtNum(Math.round(s.unclaimedPossibleReq)) + " requests/day</div>" +

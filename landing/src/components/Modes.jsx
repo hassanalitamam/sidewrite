@@ -77,23 +77,17 @@ function ModeCard({ mode }) {
   );
 }
 
-export default function Modes() {
+// Grid only — no section wrapper or heading. Mounted inside HowItWorks.jsx,
+// which owns the shared /01 chapter header for Modes + Features.
+export default function ModesGrid() {
   const m = useIsMobile();
   const s = layout(m);
 
   return (
-    <section id="v3-modes" style={{ borderBottom: "1px solid #e5e3dd" }}>
-      <div style={s.sectionPad}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "20px", marginBottom: "56px" }}>
-          <span style={{ fontFamily: mono, fontSize: "13px", color: "#e05a26" }}>/01</span>
-          <h2 style={s.h2}>Two modes. One switch.</h2>
-        </div>
-        <div style={s.twoColGrid}>
-          {MODES.map((mode) => (
-            <ModeCard key={mode.title} mode={mode} />
-          ))}
-        </div>
-      </div>
-    </section>
+    <div style={s.twoColGrid}>
+      {MODES.map((mode) => (
+        <ModeCard key={mode.title} mode={mode} />
+      ))}
+    </div>
   );
 }

@@ -14,8 +14,11 @@
 // instead of faking success.
 
 import { createClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
 
-const MAX_BODY_BYTES = 220 * 1024;
+// Sized to Vercel serverless body-size ceiling (~4.5MB); base64 inflates raw bytes ~33%,
+// so 3MB raw → ~4MB base64 leaves safe headroom under the limit.
+const MAX_BODY_BYTES = 4.5 * 1024 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10; // per IP, per warm instance — soft limit only
 
@@ -70,6 +73,81 @@ function readBody(req) {
 // Basic email regex for validation.
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Allowed MIME types for attachments.
+const ALLOWED_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'text/plain',
+  'application/pdf',
+]);
+
+// Validate and process attachments array.
+// Returns { valid: [...], error: null } on success, or { valid: [], error: <message> } on validation failure.
+function validateAttachments(attachmentsInput) {
+  if (!attachmentsInput) {
+    return { valid: [], error: null };
+  }
+
+  if (!Array.isArray(attachmentsInput)) {
+    return { valid: [], error: 'attachments must be an array' };
+  }
+
+  if (attachmentsInput.length > 3) {
+    return { valid: [], error: 'attachments: max 3 files per submission' };
+  }
+
+  const validated = [];
+  let combinedSize = 0;
+
+  for (const att of attachmentsInput) {
+    if (!att || typeof att !== 'object') {
+      return { valid: [], error: 'each attachment must be an object' };
+    }
+
+    const { filename, mime_type, data_base64 } = att;
+
+    if (!filename || typeof filename !== 'string') {
+      return { valid: [], error: 'each attachment must have a filename (string)' };
+    }
+
+    if (!mime_type || typeof mime_type !== 'string') {
+      return { valid: [], error: 'each attachment must have a mime_type (string)' };
+    }
+
+    if (!ALLOWED_MIME_TYPES.has(mime_type)) {
+      return { valid: [], error: `mime_type "${mime_type}" not allowed` };
+    }
+
+    if (!data_base64 || typeof data_base64 !== 'string') {
+      return { valid: [], error: 'each attachment must have data_base64 (string)' };
+    }
+
+    let buffer;
+    try {
+      buffer = Buffer.from(data_base64, 'base64');
+    } catch (_) {
+      return { valid: [], error: 'invalid base64 in attachment' };
+    }
+
+    const size = buffer.length;
+
+    if (size > 2 * 1024 * 1024) {
+      return { valid: [], error: 'each attachment must be <= 2MB (decoded)' };
+    }
+
+    combinedSize += size;
+    if (combinedSize > 3 * 1024 * 1024) {
+      return { valid: [], error: 'total attachments size must be <= 3MB (decoded)' };
+    }
+
+    validated.push({ filename, mime_type, buffer, size });
+  }
+
+  return { valid: validated, error: null };
 }
 
 export default async function handler(req, res) {
@@ -132,8 +210,42 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Validate attachments array.
+  const { valid: validatedAttachments, error: attachmentError } = validateAttachments(payload.attachments);
+  if (attachmentError) {
+    res.status(400).json({ ok: false, error: attachmentError });
+    return;
+  }
+
   // Initialize Supabase client with anon key.
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
+  // Upload attachments to Storage and build stored record.
+  const storedAttachments = [];
+  for (const att of validatedAttachments) {
+    const uploadPath = `feedback/${randomUUID()}/${att.filename}`;
+    try {
+      const uploadResult = await supabase.storage
+        .from('feedback-attachments')
+        .upload(uploadPath, att.buffer, { contentType: att.mime_type });
+
+      if (uploadResult.error) {
+        console.log('[feedback] Attachment upload failed:', uploadResult.error, 'path:', uploadPath);
+        // Don't fail the entire submission; just omit this attachment.
+        continue;
+      }
+
+      storedAttachments.push({
+        path: uploadPath,
+        filename: att.filename,
+        size: att.size,
+        mime_type: att.mime_type,
+      });
+    } catch (e) {
+      console.log('[feedback] Exception uploading attachment:', e, 'path:', uploadPath);
+      // Don't fail the entire submission; just omit this attachment.
+    }
+  }
 
   // Insert record into feedback table.
   // CRITICAL: do NOT chain .select() after .insert() — anon has no SELECT policy.
@@ -145,6 +257,7 @@ export default async function handler(req, res) {
     email,
     phone,
     attached_log,
+    attachments: storedAttachments,
   };
 
   try {

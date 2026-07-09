@@ -91,18 +91,13 @@ export default function Nav() {
 
         <div style={s.navLinks}>
           {!m && (
-            <a href="#v3-modes" className="sw-navlink" style={linkBase}>
-              modes
+            <a href="#v3-how" className="sw-navlink" style={linkBase}>
+              how it works
             </a>
           )}
           {!m && (
-            <a href="#v3-features" className="sw-navlink" style={linkBase}>
-              features
-            </a>
-          )}
-          {!m && (
-            <a href="#v3-safety" className="sw-navlink" style={linkBase}>
-              safety
+            <a href="#v3-trust" className="sw-navlink" style={linkBase}>
+              why trust it
             </a>
           )}
           {!m && (

@@ -46,7 +46,7 @@ Switch anytime: `sidewrite mode subscription` / `sidewrite mode standalone`.
 
 ## Run for $0 — the Free-Tier Pool
 
-One local gateway fronts 10 free-tier providers (209 models, no card required) and rotates across all of them automatically:
+One local gateway fronts 9 free-tier providers (197 models, no card required) and rotates across all of them automatically:
 
 - **Tier-aware fallback** — exhausts every same-tier candidate before ever dropping a request to a weaker model.
 - **Auto-renewing budgets** — a cooling-down provider isn't dead weight; its rate limit refills continuously and it rejoins rotation the moment it has room, no manual reset.
@@ -69,7 +69,7 @@ Each toggle is on by default and can be switched off per-feature from the dashbo
 
 ## The dashboard
 
-`sidewrite` opens a local-only site (`127.0.0.1`, token-protected): live runs, provider setup, skills, sub-agents, MCP, token-saving tools, analytics, budgets, health, and a privacy panel showing exactly what's shared (off by default).
+`sidewrite` opens a local-only site (`127.0.0.1`, token-protected): live runs, provider setup, skills, sub-agents, MCP, token-saving tools, analytics, budgets, health, a privacy panel showing exactly what's shared (off by default), and a feedback button for bug reports or screenshots.
 
 ## Commands
 

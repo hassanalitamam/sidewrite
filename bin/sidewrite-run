@@ -513,8 +513,10 @@ if [ -z "$PROVIDER" ]; then
   echo ""
   echo "ACTION — tell the user to do this, then retry:"
   echo "  1) Run  sidewrite  (opens the dashboard)."
-  echo "  2) Add a provider (OpenRouter, or your own anthropic-compatible endpoint)."
-  echo "  3) Pick/activate a model for it."
+  echo "  2) Either add a provider (OpenRouter, or your own anthropic-compatible"
+  echo "     endpoint) and pick/activate a model for it, OR use the Free Lane"
+  echo "     pane instead — free providers, but still need their own free API"
+  echo "     key pasted in."
   echo "  Dashboard: ${VIEWER_URL:-http://127.0.0.1:1510}"
   exit 2
 fi

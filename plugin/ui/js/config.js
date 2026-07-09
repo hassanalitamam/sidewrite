@@ -13,7 +13,6 @@ export const PAGES = {
   health: "pageHealth",
   budgets: "pageBudgets",
   privacy: "pagePrivacy",
-  feedback: "pageFeedback",
 };
 
 export const STAGES = ["plan", "implement", "review"];

@@ -45,24 +45,22 @@ function TerminalSession() {
           lineHeight: 1.85,
         }}
       >
-        <div style={{ color: "#9aa1ab" }}>
-          <span style={{ color: "#ff7040" }}>›</span> delegate this task with
-          Sidewrite
+        <div style={{ color: "#ff7040" }}>
+          ⚠ Claude usage limit reached — resets in 4d 12h
         </div>
         <div style={{ color: "#5f6772", marginTop: "10px" }}>
-          ⏺ Writing brief from conversation…{" "}
-          <span style={{ color: "#52d494" }}>done (2.1 KB)</span>
+          ⏺ Switching to Free-Tier Pool…{" "}
+          <span style={{ color: "#52d494" }}>done</span>
         </div>
         <div style={{ color: "#5f6772" }}>
-          ⏺ Preflight <span style={{ color: "#eef0f3" }}>openrouter/deepseek-v3</span> —{" "}
-          <span style={{ color: "#52d494" }}>credit ok</span>
+          ⏺ Preflight <span style={{ color: "#eef0f3" }}>z-ai/glm-5.2</span> —{" "}
+          <span style={{ color: "#52d494" }}>free tier · budget ok</span>
         </div>
         <div style={{ color: "#5f6772" }}>
-          ⏺ Worktree <span style={{ color: "#eef0f3" }}>sw/task-41</span> created ·
-          isolated env
+          ⏺ Session continued — <span style={{ color: "#eef0f3" }}>same context, new model</span>
         </div>
-        <div style={{ color: "#ff7040", marginTop: "10px" }}>
-          ▸ implement — running headless
+        <div style={{ color: "#52d494", marginTop: "10px" }}>
+          ▸ implement — running on GLM-5.2
           <span style={{ animation: "sw-blink 1s step-end infinite" }}>▌</span>
         </div>
         <div
@@ -79,7 +77,7 @@ function TerminalSession() {
             tokens <span style={{ color: "#eef0f3" }}>38.4k</span>
           </span>
           <span style={{ color: "#5f6772" }}>
-            cost <span style={{ color: "#eef0f3" }}>$0.412</span>
+            cost <span style={{ color: "#eef0f3" }}>$0.00</span>
           </span>
           <span style={{ color: "#5f6772" }}>
             files <span style={{ color: "#eef0f3" }}>12</span>
@@ -228,7 +226,7 @@ export default function Hero({ tagline, copyLabel, onCopy }) {
               </span>
             </div>
             <a
-              href="#v3-modes"
+              href="#v3-how"
               className="sw-muted-link"
               style={{
                 fontFamily: mono,

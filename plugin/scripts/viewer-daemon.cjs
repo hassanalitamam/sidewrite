@@ -66,7 +66,21 @@ try {
 // ---------------------------------------------------------------------------
 // Constants & shared paths
 // ---------------------------------------------------------------------------
-const VERSION = '1.2.0';
+// Single source of truth: package.json's "version" field (kept in sync with
+// plugin.json/marketplace.json by scripts/sync-version.cjs on release).
+// FIX: this was hardcoded to a stale '1.2.0' — disconnected from the real
+// shipped version (0.3.0) — which meant every feedback submission and health
+// check reported the wrong version. Falls back to '0.0.0' (never throws) if
+// package.json is somehow missing/malformed, matching this file's fail-open
+// philosophy elsewhere.
+const VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch (_) {
+    return '0.0.0';
+  }
+})();
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 1510;
 const MAX_PORT_TRIES = 20;
@@ -2043,14 +2057,14 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
-function readBody(req, cb) {
+function readBodyWithLimit(req, cb, maxBytes) {
   let size = 0;
   const chunks = [];
   let aborted = false;
   req.on('data', (chunk) => {
     if (aborted) return;
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       aborted = true;
       cb(new Error('body too large'), null);
       try {
@@ -2071,6 +2085,10 @@ function readBody(req, cb) {
   });
 }
 
+function readBody(req, cb) {
+  readBodyWithLimit(req, cb, MAX_BODY_BYTES);
+}
+
 function parseJsonSafe(str) {
   if (!str) return {};
   try {
@@ -2082,7 +2100,7 @@ function parseJsonSafe(str) {
 }
 
 function withBody(req, res, handler) {
-  readBody(req, (err, raw) => {
+  readBodyWithLimit(req, (err, raw) => {
     if (err) {
       sendJson(res, err.message === 'body too large' ? 413 : 400, {
         ok: false,
@@ -2100,7 +2118,29 @@ function withBody(req, res, handler) {
     } catch (e) {
       sendJson(res, 500, { ok: false, error: e.message });
     }
-  });
+  }, MAX_BODY_BYTES);
+}
+
+function withBodyLimit(req, res, handler, maxBytes) {
+  readBodyWithLimit(req, (err, raw) => {
+    if (err) {
+      sendJson(res, err.message === 'body too large' ? 413 : 400, {
+        ok: false,
+        error: err.message,
+      });
+      return;
+    }
+    const parsed = parseJsonSafe(raw);
+    if (parsed === null) {
+      sendJson(res, 400, { ok: false, error: 'invalid JSON' });
+      return;
+    }
+    try {
+      handler(parsed);
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: e.message });
+    }
+  }, maxBytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -3708,16 +3748,18 @@ function router(req, res) {
   }
 
   // POST /api/feedback — ingest user feedback from the plugin UI. Validates shape,
-  // scrubs secrets/PII client-side-scrubbed data defensively, attaches event log
-  // if requested, and forwards to the landing feedback endpoint with local queue
-  // fallback on network failure.
+  // scrubs secrets/PII client-side-scrubbed data defensively, accepts optional
+  // attachments (base64-encoded files), attaches event log if requested, and
+  // forwards to the landing feedback endpoint with local queue fallback on
+  // network failure.
   if (pathname === '/api/feedback' && method === 'POST') {
-    withBody(req, res, (body) => {
+    withBodyLimit(req, res, (body) => {
       body = body || {};
       const message = body.message;
       const email = body.email;
       const attach_log = body.attach_log === true; // expect boolean
       const run_id = body.run_id; // optional string
+      const attachments = body.attachments; // optional array of {filename, mime_type, data_base64}
 
       // Validate message: required, non-empty string
       if (!message || typeof message !== 'string' || message.length === 0) {
@@ -3731,18 +3773,124 @@ function router(req, res) {
         return;
       }
 
-      // Scrub message and email defensively (even though client-side scrubbed)
+      // Scrub the message defensively (even though client-side already scrubbed
+      // it) — the message is free-form text that could accidentally contain a
+      // leaked secret/path/token. Email is deliberately NOT run through
+      // errorScrub: it's a contact address the user explicitly typed into the
+      // Email field so we can reply, not incidental text that might leak PII —
+      // errorScrub.scrubString() treats any email-shaped string as something to
+      // redact (e.g. "user@example.com" -> "[email]"), which would silently
+      // corrupt every legitimate submission's reply address and fail landing's
+      // email-format validation. (Bug found via live production testing: every
+      // feedback submission was 400-ing on landing and silently falling back to
+      // the local disk queue, because the "email" landing received was the
+      // literal string "[email]".)
       let scrubbedMessage = errorScrub.scrubString(message);
-      let scrubbedEmail = errorScrub.scrubString(email);
+      const scrubbedEmail = email;
 
-      // If scrubbing removed content from required fields, reject
+      // If scrubbing removed content from the message, reject
       if (!scrubbedMessage || scrubbedMessage.length === 0) {
         sendJson(res, 400, { ok: false, error: 'message scrubbed to empty; invalid content' });
         return;
       }
-      if (!scrubbedEmail || scrubbedEmail.length === 0) {
-        sendJson(res, 400, { ok: false, error: 'email scrubbed to empty; invalid content' });
-        return;
+
+      // Validate attachments (optional, defaults to empty array)
+      const ALLOWED_MIME_TYPES = new Set([
+        'image/png',
+        'image/jpeg',
+        'image/webp',
+        'image/gif',
+        'text/plain',
+        'application/pdf',
+      ]);
+      const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB per file
+      const MAX_TOTAL_SIZE = 3 * 1024 * 1024; // 3MB total
+      const MAX_FILES = 3;
+      const MAX_FILENAME_LEN = 200;
+
+      let validatedAttachments = [];
+      if (attachments !== undefined) {
+        // If present, must be an array
+        if (!Array.isArray(attachments)) {
+          sendJson(res, 400, { ok: false, error: 'attachments must be an array' });
+          return;
+        }
+        // Check count
+        if (attachments.length > MAX_FILES) {
+          sendJson(res, 400, { ok: false, error: `attachments: max ${MAX_FILES} files allowed` });
+          return;
+        }
+
+        let totalDecodedSize = 0;
+        for (let i = 0; i < attachments.length; i++) {
+          const item = attachments[i];
+
+          // Validate structure
+          if (!item || typeof item !== 'object') {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: must be an object` });
+            return;
+          }
+
+          const filename = item.filename;
+          const mime_type = item.mime_type;
+          const data_base64 = item.data_base64;
+
+          // Validate filename
+          if (!filename || typeof filename !== 'string' || filename.length === 0) {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: filename required (non-empty string)` });
+            return;
+          }
+          if (filename.length > MAX_FILENAME_LEN) {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: filename exceeds ${MAX_FILENAME_LEN} chars` });
+            return;
+          }
+
+          // Validate mime_type
+          if (!mime_type || typeof mime_type !== 'string') {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: mime_type required (string)` });
+            return;
+          }
+          if (!ALLOWED_MIME_TYPES.has(mime_type)) {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: mime_type not allowed` });
+            return;
+          }
+
+          // Validate data_base64
+          if (!data_base64 || typeof data_base64 !== 'string') {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: data_base64 required (string)` });
+            return;
+          }
+
+          // Compute decoded size
+          let decodedSize;
+          try {
+            decodedSize = Buffer.byteLength(data_base64, 'base64');
+          } catch (_) {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: invalid base64` });
+            return;
+          }
+
+          // Check per-file size
+          if (decodedSize > MAX_FILE_SIZE) {
+            sendJson(res, 400, { ok: false, error: `attachments[${i}]: file exceeds ${MAX_FILE_SIZE / (1024 * 1024)}MB limit` });
+            return;
+          }
+
+          totalDecodedSize += decodedSize;
+
+          // Check running total
+          if (totalDecodedSize > MAX_TOTAL_SIZE) {
+            sendJson(res, 400, { ok: false, error: `attachments: combined size exceeds ${MAX_TOTAL_SIZE / (1024 * 1024)}MB limit` });
+            return;
+          }
+
+          // Add validated attachment (clean 3-field object, no extras)
+          validatedAttachments.push({
+            filename,
+            mime_type,
+            data_base64,
+          });
+        }
       }
 
       // Build payload server-side: never trust client-supplied version/platform/install_id
@@ -3754,6 +3902,7 @@ function router(req, res) {
         version: VERSION,
         platform: process.platform,
         install_id: telemetryEnabled ? getInstallId() : null,
+        attachments: validatedAttachments,
       };
 
       // Optional: include phone if present in request
@@ -3795,7 +3944,7 @@ function router(req, res) {
           sendJson(res, 200, { ok: true });
         }
       });
-    });
+    }, 6 * 1024 * 1024); // 6MB body limit for this route
     return;
   }
 

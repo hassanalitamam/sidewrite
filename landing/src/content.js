@@ -19,6 +19,7 @@ export const AUTHOR = {
 export const CURRENT_VERSION = "v0.3.0";
 
 export const TAGLINE_OPTIONS = [
+  "Hit your limit. Keep coding.",
   "Any model. Your rules.",
   "Your Claude Code, any model.",
   "Delegate the work. Keep the subscription.",
@@ -28,7 +29,7 @@ export const TAGLINE_OPTIONS = [
 export const HERO = {
   badge: `Claude Code plugin · Apache-2.0 · ${CURRENT_VERSION}`,
   subtitle:
-    "Run Claude Code on any Anthropic-compatible model — with or without a subscription. Plan on Claude, implement on your provider, watch every token on a live local dashboard.",
+    "Claude Code burns through your weekly limit fastest during implementation — reading files, running tools, iterating. Sidewrite keeps Claude for planning and review, delegates that grind to another model, and switches you to a free one automatically if you still run out.",
 };
 
 export const STATS = [
@@ -112,36 +113,33 @@ export const FEATURES = [
     title: "Live dashboard suite",
     wide: true,
     body:
-      "Real-time pipeline, provider activity, per-model cost in tokens and USD, and event log over SSE, " +
-      "plus dedicated views for analytics (per-model, provider, agent, and project cost breakdowns with " +
-      "time-series charts), system health, cost budgets with alerts, and a privacy/data panel.",
+      "Real-time pipeline, provider activity, and per-model cost, streamed live over SSE. Dedicated views cover analytics, system health, budgets, and privacy.",
   },
   {
     kicker: "RUNTIME",
     title: "Fast & lightweight",
     body:
-      "Node built-ins only. Sub-second commands from a cached snapshot; robust port handling, never duplicates a daemon. Catalog works offline.",
+      "Node built-ins only, with sub-second commands from a cached snapshot. Robust port handling never duplicates a daemon, and the catalog works offline.",
   },
   {
     kicker: "AUTO-UPDATE",
     title: "Always current",
     body:
-      "A background check against the npm registry on every run notifies you in the terminal the moment a newer version ships, with an opt-in apply path that backs up, installs, and rolls back automatically on failure. A remote version floor can require the update before a run proceeds for critical fixes — fails open if the check itself can't be reached.",
+      "A background check notifies you the moment a newer version ships, with an opt-in apply path that backs up and rolls back on failure. A remote version floor can require the update first for critical fixes.",
   },
   {
     kicker: "FREE-TIER POOL",
     title: "Run for $0",
     wide: true,
-    diagram: true,
     body:
-      "One local gateway (POST /v1/messages, standard Anthropic wire) fronts all 9 providers — point any Claude-Code-compatible client at it and it rotates across every pooled key transparently, with tier-aware fallback so a sonnet request exhausts every sonnet-tier candidate before ever dropping to haiku. A cooling-down candidate isn't dead weight: its rpm/rpd/tpm/tpd budget refills continuously, so it rejoins rotation the moment it has room again — no manual reset. Sticky sessions keep the same provider for a conversation, and a context-handoff note covers you on a forced swap. Every candidate is proactively budget-checked before dispatch, not just retried after a 429. Mistral alone publishes a 1,000,000,000-token/month free quota across its \"Experiment\" tier models — one of nine pools this deep. Keys are stored AES-256-GCM encrypted, never returned by any read API.",
+      "One local gateway fronts all 9 free providers, rotating across every pooled key automatically — tier-aware, so a sonnet request exhausts every same-tier candidate before ever dropping to haiku. Sticky sessions keep you on the same provider all conversation, and every candidate's budget is checked before dispatch, not after a 429.",
   },
   {
     kicker: "TOKEN SAVINGS",
     title: "Terse mode, compaction, RTK",
     wide: true,
     body:
-      "Three opt-out toggles, all controllable live from Studio → Tools: terse replies trim output tokens on every pooled request; history compaction deduplicates and truncates a conversation before dispatch — but only once it's actually large (100,000+ tokens), and never for good — omitted content is cached locally and the model can pull it back with a pool_retrieve tool, capped at a few rounds so it can't loop forever; and an optional hook compresses noisy Bash output (git, grep, cargo test, …) if you've separately installed the third-party rtk CLI — sidewrite never installs it for you, and it's a silent no-op if it's missing.",
+      "Three opt-out toggles, controllable live from Studio → Tools: terse replies trim output tokens, history compaction shrinks large conversations before dispatch without losing anything for good, and an optional hook compresses noisy Bash output. All independent, all reversible.",
   },
 ];
 
@@ -179,7 +177,8 @@ export const COMPARISONS = [
   },
   {
     name: "a single free API key",
-    text: "One free provider means you're stuck the moment you hit its rate limit. The Free-Tier Pool rotates across 9 providers, exhausting every same-tier candidate before ever dropping a sonnet request to haiku, keeps you on the same provider all conversation via sticky sessions (with a context-handoff note if it has to swap), and checks each candidate's rpm/rpd/tpm/tpd budget before dispatch — not after a 429.",
+    text: "One free provider means you're stuck the moment you hit its rate limit.",
+    link: { href: "#v3-pool", label: "See the Free-Tier Pool ↑" },
   },
 ];
 
@@ -219,8 +218,8 @@ export const FAQ = [
     a: "The model catalog and dashboard work offline; a key and network are only needed to actually run a model.",
   },
   {
-    q: "Can I use Sidewrite for free with no API key?",
-    a: "Yes — the Free-Tier Pool rotates across 9 free-tier providers (Z.ai/GLM, Cerebras, GitHub Models, OpenRouter free models, SambaNova, Cloudflare Workers AI, NVIDIA NIM, Google Gemini, Mistral) with no key of your own required. It exhausts every same-tier candidate before dropping a sonnet request to haiku, checks each candidate's rpm/rpd/tpm/tpd budget before dispatch, and keeps you on the same provider all conversation via sticky sessions.",
+    q: "Can I use Sidewrite for free?",
+    a: "Yes — the Free-Tier Pool rotates across 9 free-tier providers (Z.ai/GLM, Cerebras, GitHub Models, OpenRouter free models, SambaNova, Cloudflare Workers AI, NVIDIA NIM, Google Gemini, Mistral). Each is free to sign up for, no card required — you'll still paste each provider's own free API key. It exhausts every same-tier candidate before dropping a sonnet request to haiku, checks each candidate's rpm/rpd/tpm/tpd budget before dispatch, and keeps you on the same provider all conversation via sticky sessions.",
   },
   {
     q: "Does WebSearch work on a third-party model?",
@@ -230,6 +229,20 @@ export const FAQ = [
     q: "Can I cap my spend?",
     a: "You can set a monthly and/or per-run USD budget on the dashboard, with a warning threshold and live spend tracking against it. There's an enforce toggle for a hard stop, but no run path checks it yet — today budgets are visibility and alerts, not a block.",
   },
+];
+
+// Curated subset shown on the homepage — short, high-value questions only.
+// The full FAQ (above) lives at /docs/faq.html; the homepage section links
+// there for anything not covered here.
+export const HOME_FAQ = [
+  FAQ[0], // Do I need a Claude subscription?
+  FAQ[2], // Which models can I use?
+  FAQ[4], // What does it cost?
+  {
+    q: "Can I use Sidewrite for free?",
+    a: "Yes — the Free-Tier Pool rotates across 9 free-tier providers, free to sign up with no card required (you'll still add each provider's own free key). See how it works ↑.",
+  },
+  FAQ[3], // Is it safe / allowed?
 ];
 
 // ── Docs page ───────────────────────────────────────────────────────────────
@@ -290,11 +303,63 @@ export const DOCS_COMMANDS = [
 export const CHANGELOG = [
   {
     version: "v0.3.0",
-    date: "2026-07-07",
+    date: "2026-07-09",
     latest: true,
     accent: true,
     beta: true,
     entries: [
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Feedback modal with attachments." },
+          " In-plugin feedback moved from a full page to a popup, reachable from the dashboard's feedback button, and can now carry up to 3 screenshots or files (2MB each, 3MB combined) alongside the message. Remembers your email between opens — never the message text.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Contact form on the landing page." },
+          " A contact us / report an issue form, with the same attachment support as the in-plugin feedback modal.",
+        ],
+      },
+      {
+        tag: "NEW",
+        parts: [
+          { strong: "Homepage redesign." },
+          " Six sections collapsed into three — how it works, why trust it, get started. The Free-Tier Pool, previously explained in three separate places, now has one full explanation and a dedicated diagram. FAQ and the provider list trimmed to the essentials, with links out to the full versions.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Feedback submissions were silently failing in production." },
+          " An overly aggressive PII scrubber was redacting the reply email to ",
+          { code: "[email]" },
+          " before every send, so every submission was rejected by landing and fell back to the local disk queue. Email is no longer run through the scrubber — message text still is.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Dashboard-reported version was stale." },
+          " Hardcoded to an old ",
+          { code: "1.2.0" },
+          "; now reads the real version from ",
+          { code: "package.json" },
+          " at boot.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: [
+          { strong: "Xiaomi MiMo provider corrected." },
+          " Removed 3 discontinued models and fixed the base URL to use MiMo's Anthropic-compatible endpoint instead of its OpenAI-compatible one.",
+        ],
+      },
+      {
+        tag: "FIX",
+        parts: ["Enlarged the Base URL / Models Endpoint input fields in the add-provider form — long URLs were cramped."],
+      },
       {
         tag: "FIX",
         parts: [
@@ -371,6 +436,7 @@ export const CHANGELOG = [
   {
     version: "v0.2.1",
     date: "2026-07-06",
+    beta: true,
     entries: [
       {
         tag: "FIX",
@@ -391,6 +457,7 @@ export const CHANGELOG = [
   {
     version: "v0.2.0",
     date: "2026-07-06",
+    beta: true,
     entries: [
       {
         tag: "NEW",
@@ -419,6 +486,7 @@ export const CHANGELOG = [
     date: "2026-07-06",
     accent: false,
     last: true,
+    beta: true,
     entries: [
       {
         tag: "NEW",

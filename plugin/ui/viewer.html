@@ -94,7 +94,6 @@
         <button class="tab" data-page="health" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-health"></use></svg>Health</button>
         <button class="tab" data-page="budgets" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-wallet"></use></svg>Budgets</button>
         <button class="tab" data-page="privacy" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-shield"></use></svg>Privacy</button>
-        <button class="tab" data-page="feedback" role="menuitem"><svg class="icon sm" aria-hidden="true"><use href="#ic-list"></use></svg>Feedback</button>
       </div>
     </div>
 
@@ -425,11 +424,6 @@
     <p class="eyebrow"><svg class="icon sm" aria-hidden="true"><use href="#ic-shield"></use></svg>Privacy &amp; data</p>
     <div id="privacyRoot"></div>
   </section>
-
-  <!-- ============ FEEDBACK PAGE (owns #feedbackRoot) ============ -->
-  <section class="page" id="pageFeedback" hidden>
-    <div id="feedbackRoot"></div>
-  </section>
 </main>
 
 <!-- First-run onboarding modal (blocking) -->
@@ -464,8 +458,22 @@
       <div class="modal-body">
         <div id="onboardProvHost"></div>
         <span class="modal-step-note" id="obProvCount">No providers yet.</span>
+        <div class="hint" style="margin:14px 0 8px;">or, use a free provider instead of a paid one:</div>
+        <button type="button" class="btn" id="obFreetier">Use a free provider</button>
+        <div class="hint" style="margin-top:6px;">Free to sign up — you'll still paste that provider's own (free) API key.</div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Feedback modal (modal dialog for sending feedback with optional file attachments) -->
+<div class="modal-overlay" id="feedbackModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="feedbackModalTitle">
+    <div class="modal-head">
+      <h2 id="feedbackModalTitle">Send Feedback</h2>
+      <button type="button" id="feedbackModalClose" aria-label="Close" class="modal-close-btn">✕</button>
+    </div>
+    <div class="modal-body" id="feedbackRoot"></div>
   </div>
 </div>
 

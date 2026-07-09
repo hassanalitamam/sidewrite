@@ -4,17 +4,16 @@ import { INSTALL_CMD, INSTALL_CHIPS } from "../content.js";
 
 const mono = "'IBM Plex Mono', monospace";
 
+// Unnumbered — a bridge between chapters, not a chapter of its own. The Hero
+// already carries the primary install moment and explanation; this repeats
+// only the ask (copyable command), at a fraction of the height.
 export default function Install({ copyLabel, onCopy }) {
   const m = useIsMobile();
   const s = layout(m);
 
   return (
     <section id="v3-install" style={{ borderBottom: "1px solid #e5e3dd", background: "#ffffff" }}>
-      <div style={s.installOuter}>
-        <h2 style={s.installH2}>One command</h2>
-        <p style={{ fontSize: "16px", color: "#5a6069", margin: "0 0 40px" }}>
-          Installs as a Claude Code plugin, globally — works in every project.
-        </p>
+      <div style={s.installBarOuter}>
         <div
           onClick={onCopy}
           className="sw-copy"
@@ -23,16 +22,16 @@ export default function Install({ copyLabel, onCopy }) {
             alignItems: "center",
             gap: "16px",
             fontFamily: mono,
-            fontSize: "19px",
+            fontSize: m ? "15px" : "17px",
             border: "1px solid #e05a26",
             background: "rgba(224,90,38,0.05)",
-            padding: "20px 32px",
+            padding: m ? "14px 20px" : "16px 26px",
             cursor: "pointer",
           }}
         >
           <span style={{ color: "#e05a26", userSelect: "none" }}>$</span>
           <span style={{ whiteSpace: "nowrap" }}>{INSTALL_CMD}</span>
-          <span style={{ color: "#e05a26", fontSize: "13px", minWidth: "50px", textAlign: "right" }}>
+          <span style={{ color: "#e05a26", fontSize: "12px", minWidth: "46px", textAlign: "right" }}>
             {copyLabel}
           </span>
         </div>
@@ -42,14 +41,14 @@ export default function Install({ copyLabel, onCopy }) {
             justifyContent: "center",
             gap: "8px",
             flexWrap: "wrap",
-            marginTop: "32px",
+            marginTop: "18px",
             fontFamily: mono,
-            fontSize: "12px",
+            fontSize: "11.5px",
             color: "#878d96",
           }}
         >
           {INSTALL_CHIPS.map((chip) => (
-            <span key={chip} style={{ border: "1px solid #e5e3dd", padding: "5px 12px" }}>
+            <span key={chip} style={{ border: "1px solid #e5e3dd", padding: "4px 10px" }}>
               {chip}
             </span>
           ))}

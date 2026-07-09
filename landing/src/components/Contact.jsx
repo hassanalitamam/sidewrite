@@ -1,13 +1,6 @@
 import { useState } from "react";
-import { layout } from "../styles.js";
-import { useIsMobile } from "../useIsMobile.js";
 
-const mono = "'IBM Plex Mono', monospace";
-
-export default function Contact() {
-  const m = useIsMobile();
-  const s = layout(m);
-
+export default function ContactBlock() {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -17,6 +10,8 @@ export default function Contact() {
     page_url: "",
   });
 
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [fileError, setFileError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState(null); // "success", "error", or null
 
@@ -56,24 +51,98 @@ export default function Contact() {
     }));
   };
 
+  const handleFileChange = (e) => {
+    const newFiles = Array.from(e.target.files || []);
+    setFileError(null);
+
+    // Validate each file being added
+    for (const file of newFiles) {
+      // Check if adding this file would exceed 3 files total
+      if (selectedFiles.length + newFiles.indexOf(file) >= 3) {
+        setFileError("Maximum 3 files per submission");
+        return;
+      }
+
+      // Check individual file size (2MB limit)
+      if (file.size > 2 * 1024 * 1024) {
+        setFileError(`File "${file.name}" exceeds 2MB limit`);
+        return;
+      }
+
+      // Check combined size (3MB limit)
+      const currentCombinedSize = selectedFiles.reduce((acc, f) => acc + f.size, 0);
+      if (currentCombinedSize + file.size > 3 * 1024 * 1024) {
+        setFileError("Combined file size exceeds 3MB limit");
+        return;
+      }
+    }
+
+    // Add valid files to the list
+    setSelectedFiles((prev) => {
+      const newList = [...prev, ...newFiles];
+      // Still enforce max 3 files total
+      if (newList.length > 3) {
+        setFileError("Maximum 3 files per submission");
+        return prev;
+      }
+      return newList.slice(0, 3);
+    });
+  };
+
+  const removeFile = (index) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setFileError(null);
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setStatus(null);
+    setFileError(null);
 
     if (!validateForm()) {
       return;
     }
 
-    // Capture page URL and honeypot value at submit time
-    const submitData = {
-      ...formData,
-      page_url: window.location.href,
-      company: formData.company,
-    };
-
     setLoading(true);
 
     try {
+      // Encode all selected files to base64
+      const attachments = await Promise.all(
+        selectedFiles.map((file) => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              // Strip the "data:..." prefix from readAsDataURL result
+              const dataUrl = reader.result;
+              const base64 = dataUrl.split(",")[1];
+              resolve({
+                filename: file.name,
+                mime_type: file.type,
+                data_base64: base64,
+              });
+            };
+            reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`));
+            reader.readAsDataURL(file);
+          });
+        })
+      );
+
+      // Capture page URL and honeypot value at submit time
+      const submitData = {
+        ...formData,
+        page_url: window.location.href,
+        company: formData.company,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      };
+
       const response = await fetch("/api/contact", {
         method: "POST",
         headers: {
@@ -92,10 +161,12 @@ export default function Contact() {
           company: "",
           page_url: "",
         });
+        setSelectedFiles([]);
       } else {
         setStatus("error");
       }
     } catch (err) {
+      setFileError(err.message || "Failed to process files");
       setStatus("error");
     } finally {
       setLoading(false);
@@ -103,17 +174,12 @@ export default function Contact() {
   };
 
   return (
-    <section id="v3-contact" style={{ borderBottom: "1px solid #e5e3dd", background: "#ffffff" }}>
-      <div style={s.installOuter}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "20px", marginBottom: "32px" }}>
-          <span style={{ fontFamily: mono, fontSize: "13px", color: "#e05a26" }}>/06</span>
-          <h2 style={s.installH2}>Contact us</h2>
-        </div>
-        <p style={{ fontSize: "16px", color: "#5a6069", margin: "0 0 40px" }}>
-          Have questions or found an issue? We'd love to hear from you.
-        </p>
+    <div style={{ textAlign: "center" }}>
+      <p style={{ fontSize: "16px", color: "#5a6069", margin: "0 0 40px" }}>
+        Have questions or found an issue? We'd love to hear from you.
+      </p>
 
-        <form
+      <form
           onSubmit={handleSubmit}
           style={{
             maxWidth: "600px",
@@ -268,6 +334,97 @@ export default function Contact() {
             />
           </div>
 
+          {/* File upload field */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <label
+              htmlFor="attachments"
+              style={{
+                fontSize: "14px",
+                fontWeight: 600,
+                color: "#16181c",
+              }}
+            >
+              Attachments <span style={{ fontSize: "12px", color: "#878d96" }}>(optional, max 3 files, 3MB total)</span>
+            </label>
+            <input
+              type="file"
+              id="attachments"
+              multiple
+              accept="image/png,image/jpeg,image/webp,image/gif,text/plain,application/pdf"
+              onChange={handleFileChange}
+              disabled={loading}
+              style={{
+                padding: "10px 14px",
+                fontSize: "14px",
+                border: "1px solid #d9d6cf",
+                background: "#ffffff",
+                fontFamily: "inherit",
+                color: "#16181c",
+              }}
+            />
+          </div>
+
+          {/* File list with remove controls */}
+          {selectedFiles.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div style={{ fontSize: "12px", color: "#878d96" }}>
+                {selectedFiles.length} file{selectedFiles.length !== 1 ? "s" : ""} selected
+              </div>
+              {selectedFiles.map((file, index) => (
+                <div
+                  key={index}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    background: "#f5f4f2",
+                    border: "1px solid #e5e3dd",
+                    fontSize: "13px",
+                    color: "#5a6069",
+                  }}
+                >
+                  <span>
+                    {file.name} ({formatFileSize(file.size)})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    disabled={loading}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#e05a26",
+                      cursor: loading ? "not-allowed" : "pointer",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      padding: "0",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* File error message */}
+          {fileError && (
+            <div
+              style={{
+                padding: "12px 14px",
+                background: "#ffebee",
+                border: "1px solid #f44336",
+                color: "#c62828",
+                fontSize: "14px",
+                borderRadius: "2px",
+              }}
+            >
+              {fileError}
+            </div>
+          )}
+
           {/* Status messages */}
           {status === "success" && (
             <div
@@ -325,8 +482,7 @@ export default function Contact() {
           >
             {loading ? "Sending..." : "Send message"}
           </button>
-        </form>
-      </div>
-    </section>
+      </form>
+    </div>
   );
 }
